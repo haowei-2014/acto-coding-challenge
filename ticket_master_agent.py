@@ -7,7 +7,7 @@ Max 3 tools enforced.
 
 import json
 import os
-from typing import Annotated, List, Dict, Any, Optional, TypedDict
+from typing import Annotated, List, Dict, Any, Optional
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import random
@@ -16,20 +16,13 @@ import pandas as pd
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 # Load environment variables
 load_dotenv()
 
 # Initialize LLM
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-
-
-# Structured output schema
-class TicketMasterOutput(TypedDict):
-    """Structured output from Ticket Master Agent"""
-    competent: bool  # If user's query is out of domain, return False. Otherwise return True
-    content: str  # Natural language response with confidence and source
 
 
 class TicketMasterAgent:
@@ -161,6 +154,7 @@ class TicketMasterAgent:
                     "status": "Available" if showtime['available_seats'] > 10 else "Limited Seats"
                 })
 
+            print("----found")
             return json.dumps({
                 "movie": movie_key,
                 "showtimes": showtimes_by_date,
@@ -170,6 +164,7 @@ class TicketMasterAgent:
             }, indent=2)
 
         except Exception as e:
+            print("----except")
             return json.dumps({
                 "error": str(e),
                 "confidence": 0.0,
@@ -248,6 +243,7 @@ class TicketMasterAgent:
                 "source": "Theater Pricing System"
             }
 
+            print("----found")
             return json.dumps(pricing, indent=2)
 
         except Exception as e:
@@ -412,7 +408,8 @@ Important guidelines:
 - Determine if the query is within your domain (tickets, showtimes, pricing, purchases)
   * IN-DOMAIN: showtimes, ticket prices, reservations, seat availability, formats
   * OUT-OF-DOMAIN: movie recommendations, actor info, plot details, snacks, vendor items
-- If asked about OUT-OF-DOMAIN topics, politely inform the user this is outside your expertise
+- If asked about OUT-OF-DOMAIN topics, prefix your response with the keyword OUT-OF-DOMAIN, and
+  politely inform the user this is outside your expertise
 - Always re-check seat availability before confirming purchases
 - Provide clear price breakdowns showing all fees and taxes
 - Ground all information in actual returned data
@@ -430,15 +427,11 @@ Example response format:
 """
 
         # Create agent with system prompt
-        agent = create_react_agent(
-            llm,
-            tools,
-            prompt=system_prompt
-        )
+        agent = create_agent(llm, tools, system_prompt=system_prompt)
 
         return agent
 
-    def invoke(self, query: str, state: Optional[Dict[str, Any]] = None) -> TicketMasterOutput:
+    def invoke(self, query: str, state: Optional[Dict[str, Any]] = None) -> str:
         """
         Invoke the Ticket Master agent with a query
 
@@ -447,7 +440,7 @@ Example response format:
             state: Optional session state (for context preservation)
 
         Returns:
-            TicketMasterOutput with competent flag and content
+            str: Agent's response content
         """
         agent = self.create_agent()
 
@@ -460,21 +453,7 @@ Example response format:
         # Extract response content
         agent_response = result["messages"][-1].content if result["messages"] else "No response"
 
-        # Determine competency based on response
-        # Check if the response indicates out-of-domain
-        out_of_domain_keywords = [
-            "outside my expertise", "not my area", "movie specialist", "vendor",
-            "can't help with recommendations", "can't help with actor", "plot",
-            "movie details", "actor information"
-        ]
-
-        competent = not any(keyword.lower() in agent_response.lower() for keyword in out_of_domain_keywords)
-
-        # Return structured output
-        return TicketMasterOutput(
-            competent=competent,
-            content=agent_response
-        )
+        return agent_response
 
 
 # Global instance (singleton pattern)
@@ -489,7 +468,7 @@ def get_ticket_master() -> TicketMasterAgent:
     return _ticket_master_instance
 
 
-def invoke_ticket_master(query: str, state: Optional[Dict[str, Any]] = None) -> TicketMasterOutput:
+def invoke_ticket_master(query: str, state: Optional[Dict[str, Any]] = None) -> str:
     """
     Convenience function to invoke the Ticket Master agent
 
@@ -498,7 +477,7 @@ def invoke_ticket_master(query: str, state: Optional[Dict[str, Any]] = None) -> 
         state: Optional session state (for context preservation)
 
     Returns:
-        TicketMasterOutput with competent flag and content
+        str: Agent's response content
     """
     ticket_master = get_ticket_master()
     return ticket_master.invoke(query, state)
@@ -515,8 +494,7 @@ if __name__ == "__main__":
     query1 = "What showtimes are available for Avatar?"
     response1 = invoke_ticket_master(query1)
     print(f"Query: {query1}")
-    print(f"Competent: {response1['competent']}")
-    print(f"Response: {response1['content']}\n")
+    print(f"Response: {response1}\n")
 
     # Test 2: In-domain query - Get Pricing
     print("=" * 80)
@@ -525,8 +503,7 @@ if __name__ == "__main__":
     query2 = "How much for 2 IMAX tickets?"
     response2 = invoke_ticket_master(query2)
     print(f"Query: {query2}")
-    print(f"Competent: {response2['competent']}")
-    print(f"Response: {response2['content']}\n")
+    print(f"Response: {response2}\n")
 
     # Test 3: In-domain query - Purchase Tickets
     print("=" * 80)
@@ -535,8 +512,7 @@ if __name__ == "__main__":
     query3 = "Can I reserve 2 tickets for Avatar at 7pm in IMAX?"
     response3 = invoke_ticket_master(query3)
     print(f"Query: {query3}")
-    print(f"Competent: {response3['competent']}")
-    print(f"Response: {response3['content']}\n")
+    print(f"Response: {response3}\n")
 
     # Test 4: Out-of-domain query - Movie Recommendations
     print("=" * 80)
@@ -545,8 +521,7 @@ if __name__ == "__main__":
     query4 = "What's a good sci-fi movie to watch?"
     response4 = invoke_ticket_master(query4)
     print(f"Query: {query4}")
-    print(f"Competent: {response4['competent']}")
-    print(f"Response: {response4['content']}\n")
+    print(f"Response: {response4}\n")
 
     # Test 5: Out-of-domain query - Snacks
     print("=" * 80)
@@ -555,5 +530,4 @@ if __name__ == "__main__":
     query5 = "Can I get popcorn with my tickets?"
     response5 = invoke_ticket_master(query5)
     print(f"Query: {query5}")
-    print(f"Competent: {response5['competent']}")
-    print(f"Response: {response5['content']}\n")
+    print(f"Response: {response5}\n")

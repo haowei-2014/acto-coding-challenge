@@ -1,0 +1,405 @@
+"""
+Vendor / Store Manager Agent
+
+Handles snack pricing, inventory, and orders.
+Max 3 tools enforced.
+"""
+
+import json
+import os
+from typing import Annotated, List, Dict, Any, Optional
+from dotenv import load_dotenv
+from datetime import datetime, timedelta
+import random
+
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+from langchain.agents import create_agent
+
+# Load environment variables
+load_dotenv()
+
+# Initialize LLM
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+
+class VendorAgent:
+    """Vendor/Store Manager Agent - handles snacks, inventory, and orders"""
+
+    def __init__(self):
+        """Initialize the Vendor with inventory database"""
+        self.inventory_db = {}
+        self.combos = {}
+        self.orders_db = {}
+        self._load_inventory()
+
+    def _load_inventory(self):
+        """Load inventory from JSON file"""
+        try:
+            with open('data/vendor.json', 'r') as f:
+                data = json.load(f)
+                self.inventory_db = data['inventory']
+                self.combos = data['combos']
+            print(f"Loaded inventory with {len(self.inventory_db)} categories and {len(self.combos)} combos")
+        except Exception as e:
+            print(f"Error loading inventory: {e}")
+            # Minimal fallback
+            self.inventory_db = {
+                "Popcorn": {"Large": {"price": 9.00, "stock": 40}},
+                "Soda": {"Large": {"price": 7.00, "stock": 50}}
+            }
+            self.combos = {}
+
+    def get_snack_pricing(self, item_name: Optional[str] = None) -> str:
+        """
+        Get pricing information for snacks and combos.
+        Returns prices and available items.
+        """
+        try:
+            result = {"items": [], "combos": [], "confidence": 1.0, "source": "Theater Vendor System"}
+
+            # Search for specific item
+            if item_name:
+                found = False
+                search_lower = item_name.lower()
+
+                for category, items in self.inventory_db.items():
+                    for item, details in items.items():
+                        # Create full name for matching (e.g., "Popcorn Large")
+                        full_name = f"{category} {item}".lower()
+
+                        # Match if search term is in full name, item name, or category
+                        if (search_lower in full_name or
+                            search_lower in item.lower() or
+                            search_lower in category.lower()):
+                            result["items"].append({
+                                "category": category,
+                                "name": item,
+                                "price": f"${details['price']:.2f}",
+                                "in_stock": details['stock'] > 0
+                            })
+                            found = True
+
+                if not found:
+                    return json.dumps({
+                        "error": f"Item '{item_name}' not found",
+                        "available_categories": list(self.inventory_db.keys()),
+                        "confidence": 0.0,
+                        "source": "Theater Vendor System"
+                    })
+            else:
+                # Return all items
+                for category, items in self.inventory_db.items():
+                    for item, details in items.items():
+                        result["items"].append({
+                            "category": category,
+                            "name": item,
+                            "price": f"${details['price']:.2f}",
+                            "in_stock": details['stock'] > 0
+                        })
+
+            # Include combos
+            for combo_name, combo_details in self.combos.items():
+                result["combos"].append({
+                    "name": combo_name,
+                    "items": combo_details["items"],
+                    "price": f"${combo_details['price']:.2f}",
+                    "savings": f"${combo_details['savings']:.2f}"
+                })
+
+            return json.dumps(result, indent=2)
+
+        except Exception as e:
+            return json.dumps({"error": str(e), "confidence": 0.0, "source": "Theater Vendor System"})
+
+    def check_availability(self, items: str) -> str:
+        """
+        Check inventory availability for specific items.
+
+        Args:
+            items: Comma-separated list of items (e.g., "Popcorn Large, Soda Medium")
+        """
+        try:
+            item_list = [item.strip() for item in items.split(",")]
+            results = []
+
+            for item_query in item_list:
+                found = False
+                for category, items_dict in self.inventory_db.items():
+                    for item_name, details in items_dict.items():
+                        full_name = f"{category} {item_name}"
+                        if item_query.lower() in full_name.lower():
+                            results.append({
+                                "requested": item_query,
+                                "item": full_name,
+                                "available": details['stock'] > 0,
+                                "stock": details['stock'],
+                                "price": f"${details['price']:.2f}"
+                            })
+                            found = True
+                            break
+                    if found:
+                        break
+
+                if not found:
+                    results.append({
+                        "requested": item_query,
+                        "available": False,
+                        "error": "Item not found"
+                    })
+
+            return json.dumps({
+                "availability": results,
+                "confidence": 1.0,
+                "source": "Theater Vendor Inventory System"
+            }, indent=2)
+
+        except Exception as e:
+            return json.dumps({"error": str(e), "confidence": 0.0, "source": "Theater Vendor Inventory System"})
+
+    def place_order(self, items: str, pickup_time: Optional[str] = None) -> str:
+        """
+        Place an order for snacks.
+
+        Args:
+            items: Comma-separated list (e.g., "Popcorn Large x2, Soda Medium")
+            pickup_time: Preferred pickup time (optional)
+        """
+        try:
+            item_list = [item.strip() for item in items.split(",")]
+            order_items = []
+            total_price = 0.0
+
+            for item_query in item_list:
+                # Parse quantity (e.g., "Popcorn Large x2")
+                quantity = 1
+                if " x" in item_query:
+                    parts = item_query.rsplit(" x", 1)
+                    item_query = parts[0].strip()
+                    quantity = int(parts[1].strip())
+
+                # Find item
+                found = False
+                for category, items_dict in self.inventory_db.items():
+                    for item_name, details in items_dict.items():
+                        full_name = f"{category} {item_name}"
+                        if item_query.lower() in full_name.lower():
+                            # Check stock
+                            if details['stock'] < quantity:
+                                return json.dumps({
+                                    "error": "Insufficient inventory",
+                                    "item": full_name,
+                                    "requested": quantity,
+                                    "available": details['stock'],
+                                    "confidence": 1.0,
+                                    "source": "Theater Vendor Order System"
+                                })
+
+                            # Reserve inventory
+                            details['stock'] -= quantity
+                            item_price = details['price'] * quantity
+                            total_price += item_price
+
+                            order_items.append({
+                                "item": full_name,
+                                "quantity": quantity,
+                                "unit_price": f"${details['price']:.2f}",
+                                "subtotal": f"${item_price:.2f}"
+                            })
+                            found = True
+                            break
+                    if found:
+                        break
+
+                if not found:
+                    return json.dumps({
+                        "error": f"Item '{item_query}' not found",
+                        "confidence": 0.0,
+                        "source": "Theater Vendor Order System"
+                    })
+
+            # Calculate total
+            tax = total_price * 0.08
+            final_total = total_price + tax
+
+            # Generate pickup time
+            if not pickup_time:
+                pickup_time = (datetime.now() + timedelta(minutes=5)).strftime("%H:%M")
+
+            # Create order
+            order_id = f"ORD{random.randint(100000, 999999)}"
+            pickup_code = f"PICK{random.randint(1000, 9999)}"
+
+            order = {
+                "order_id": order_id,
+                "items": order_items,
+                "subtotal": f"${total_price:.2f}",
+                "tax": f"${tax:.2f}",
+                "total": f"${final_total:.2f}",
+                "pickup_time": pickup_time,
+                "pickup_code": pickup_code,
+                "status": "confirmed"
+            }
+
+            self.orders_db[order_id] = order
+
+            return json.dumps({
+                "status": "success",
+                "message": "Order placed successfully",
+                "order": order,
+                "confidence": 1.0,
+                "source": "Theater Vendor Order System"
+            }, indent=2)
+
+        except Exception as e:
+            return json.dumps({"error": str(e), "confidence": 0.0, "source": "Theater Vendor Order System"})
+
+    def create_tools(self):
+        """Create LangChain tools from instance methods"""
+        @tool
+        def get_snack_pricing(
+            item_name: Annotated[Optional[str], "Specific item name (optional)"] = None
+        ) -> str:
+            """Get pricing information for snacks and combos."""
+            return self.get_snack_pricing(item_name)
+
+        @tool
+        def check_availability(
+            items: Annotated[str, "Comma-separated list of items (e.g., 'Popcorn Large, Soda Medium')"]
+        ) -> str:
+            """Check inventory availability for specific items."""
+            return self.check_availability(items)
+
+        @tool
+        def place_order(
+            items: Annotated[str, "Comma-separated items with quantities (e.g., 'Popcorn Large x2, Soda Medium')"],
+            pickup_time: Annotated[Optional[str], "Pickup time in HH:MM format (optional)"] = None
+        ) -> str:
+            """Place an order for snacks with inventory reservation."""
+            return self.place_order(items, pickup_time)
+
+        return [get_snack_pricing, check_availability, place_order]
+
+    def create_agent(self):
+        """Create the Vendor agent with exactly 3 tools"""
+        tools = self.create_tools()
+        assert len(tools) <= 3, "Vendor cannot have more than 3 tools"
+
+        system_prompt = """You are the Vendor/Store Manager at a movie theater.
+
+Your responsibilities:
+- Provide snack pricing and menu information
+- Check inventory availability for items
+- Process snack orders and provide pickup details
+
+You have access to exactly 3 tools:
+1. get_snack_pricing: Get prices for snacks and combo deals
+2. check_availability: Check stock status for items
+3. place_order: Process orders with inventory reservation
+
+Important guidelines:
+- ALWAYS cite confidence scores and sources for EVERY piece of information
+- Never hallucinate prices, stock levels, or order details not returned by your tools
+- Determine if the query is within your domain (snacks, food, beverages, orders)
+  * IN-DOMAIN: snack prices, inventory, combos, food orders, pickup times
+  * OUT-OF-DOMAIN: movie recommendations, actor info, tickets, showtimes, reservations
+- If asked about OUT-OF-DOMAIN topics, prefix your response with the keyword OUT-OF-DOMAIN, and
+ politely inform the user this is outside your expertise
+- Suggest combo deals when they save money
+- Ground all information in actual returned data
+
+CRITICAL Validation requirements:
+- MUST include confidence scores from tool responses in your final answer
+- MUST cite data sources (Theater Vendor System) for each piece of information
+- Format: Always include "Confidence: X%" and "Source: [source name]" for each response
+
+Example response format:
+"A Large Popcorn costs $9.00 and a Medium Soda costs $5.50. Both are in stock.
+**Confidence: 100%** | **Source: Theater Vendor System**"
+"""
+
+        agent = create_agent(llm, tools, system_prompt=system_prompt)
+        return agent
+
+    def invoke(self, query: str, state: Optional[Dict[str, Any]] = None) -> str:
+        """Invoke the Vendor agent with a query
+
+        Args:
+            query: User's question or request
+            state: Optional session state (for context preservation)
+
+        Returns:
+            str: Agent's response content
+        """
+        agent = self.create_agent()
+        messages = [HumanMessage(content=query)]
+        result = agent.invoke({"messages": messages})
+        agent_response = result["messages"][-1].content if result["messages"] else "No response"
+        return agent_response
+
+
+# Global instance (singleton pattern)
+_vendor_instance = None
+
+
+def get_vendor() -> VendorAgent:
+    """Get or create the global Vendor instance"""
+    global _vendor_instance
+    if _vendor_instance is None:
+        _vendor_instance = VendorAgent()
+    return _vendor_instance
+
+
+def invoke_vendor(query: str, state: Optional[Dict[str, Any]] = None) -> str:
+    """Convenience function to invoke the Vendor agent
+
+    Args:
+        query: User's question or request
+        state: Optional session state (for context preservation)
+
+    Returns:
+        str: Agent's response content
+    """
+    vendor = get_vendor()
+    return vendor.invoke(query, state)
+
+
+if __name__ == "__main__":
+    print("Testing Vendor Agent with Structured Output...\n")
+
+    # Test 1: In-domain - Get Pricing
+    print("=" * 80)
+    print("Test 1: Get Snack Pricing (IN-DOMAIN)")
+    print("=" * 80)
+    query1 = "How much is a large popcorn and soda?"
+    response1 = invoke_vendor(query1)
+    print(f"Query: {query1}")
+    print(f"Response: {response1}\n")
+
+    # Test 2: In-domain - Check Availability
+    print("=" * 80)
+    print("Test 2: Check Availability (IN-DOMAIN)")
+    print("=" * 80)
+    query2 = "Do you have nachos available?"
+    response2 = invoke_vendor(query2)
+    print(f"Query: {query2}")
+    print(f"Response: {response2}\n")
+
+    # Test 3: In-domain - Place Order
+    print("=" * 80)
+    print("Test 3: Place Order (IN-DOMAIN)")
+    print("=" * 80)
+    query3 = "I want to order 2 large popcorns and a medium soda"
+    response3 = invoke_vendor(query3)
+    print(f"Query: {query3}")
+    print(f"Response: {response3}\n")
+
+    # Test 4: Out-of-domain - Movies
+    print("=" * 80)
+    print("Test 4: Movie Info (OUT-OF-DOMAIN)")
+    print("=" * 80)
+    query4 = "What movies are playing tonight?"
+    response4 = invoke_vendor(query4)
+    print(f"Query: {query4}")
+    print(f"Response: {response4}\n")
