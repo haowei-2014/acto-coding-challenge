@@ -354,7 +354,10 @@ Example response format:
         """
         agent = self.create_agent()
         messages = [HumanMessage(content=query)]
-        result = agent.invoke({"messages": messages})
+        result = agent.invoke(
+            {"messages": messages},
+            config={"recursion_limit": 15}
+        )
         agent_response = result["messages"][-1].content if result["messages"] else "No response"
         return agent_response
 

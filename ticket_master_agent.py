@@ -11,6 +11,7 @@ from typing import Annotated, List, Dict, Any, Optional
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import random
+import calendar
 
 import pandas as pd
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -95,58 +96,132 @@ class TicketMasterAgent:
                     'total_seats': 200
                 }]
 
+    def _parse_date(self, date_input: Optional[str]) -> Optional[str]:
+        """
+        Parse date input which can be:
+        - YYYY-MM-DD format
+        - Weekday name (e.g., "Monday", "Friday")
+        - Relative terms (e.g., "today", "tomorrow")
+
+        Returns date in YYYY-MM-DD format or None
+        """
+        if not date_input:
+            return None
+
+        date_lower = date_input.lower().strip()
+
+        # Check if already in YYYY-MM-DD format
+        if '-' in date_input and len(date_input) == 10:
+            return date_input
+
+        today = datetime.now()
+
+        # Handle relative terms
+        if date_lower in ['today']:
+            return today.strftime('%Y-%m-%d')
+        elif date_lower in ['tomorrow']:
+            return (today + timedelta(days=1)).strftime('%Y-%m-%d')
+
+        # Handle weekday names
+        weekdays = {
+            'monday': 0, 'mon': 0,
+            'tuesday': 1, 'tue': 1, 'tues': 1,
+            'wednesday': 2, 'wed': 2,
+            'thursday': 3, 'thu': 3, 'thur': 3, 'thurs': 3,
+            'friday': 4, 'fri': 4,
+            'saturday': 5, 'sat': 5,
+            'sunday': 6, 'sun': 6
+        }
+
+        if date_lower in weekdays:
+            target_weekday = weekdays[date_lower]
+            current_weekday = today.weekday()
+
+            # Calculate days until target weekday
+            days_ahead = target_weekday - current_weekday
+            if days_ahead <= 0:  # Target day already happened this week
+                days_ahead += 7  # Get next week's occurrence
+
+            target_date = today + timedelta(days=days_ahead)
+            return target_date.strftime('%Y-%m-%d')
+
+        # If we can't parse it, return as-is and let downstream handle it
+        return date_input
+
     def check_showtimes(
         self,
-        movie_title: str,
+        movie_title: Optional[str] = None,
         date: Optional[str] = None,
         format_preference: Optional[str] = None
     ) -> str:
         """
-        Check available showtimes for a specific movie.
+        Check available showtimes. Can filter by movie, date, and/or format.
+        If movie_title is not provided, returns showtimes for all movies matching other criteria.
+        Date can be: YYYY-MM-DD format, weekday name (Monday-Sunday), or relative terms (today/tomorrow).
         Returns date, time, format, and seat availability.
         """
         try:
-            # Find movie (case-insensitive)
-            movie_key = None
-            for movie in self.showtimes_db.keys():
-                if movie.lower() == movie_title.lower() or movie_title.lower() in movie.lower():
-                    movie_key = movie
-                    break
+            # Parse date input (convert weekdays to YYYY-MM-DD)
+            parsed_date = self._parse_date(date)
 
-            if not movie_key:
-                return json.dumps({
-                    "error": f"Movie '{movie_title}' not found in current listings",
-                    "available_movies": self.movies_list[:10],
-                    "confidence": 0.0,
-                    "source": "Theater Showtime Database"
-                })
+            # Collect all matching showtimes
+            all_showtimes = []
 
-            showtimes = self.showtimes_db[movie_key]
+            if movie_title:
+                # Find specific movie (case-insensitive)
+                movie_key = None
+                for movie in self.showtimes_db.keys():
+                    if movie.lower() == movie_title.lower() or movie_title.lower() in movie.lower():
+                        movie_key = movie
+                        break
 
-            # Filter by date if provided
-            if date:
-                showtimes = [s for s in showtimes if s['date'] == date]
+                if not movie_key:
+                    return json.dumps({
+                        "error": f"Movie '{movie_title}' not found in current listings",
+                        "available_movies": self.movies_list[:10],
+                        "confidence": 0.0,
+                        "source": "Theater Showtime Database"
+                    })
+
+                # Get showtimes for specific movie
+                for showtime in self.showtimes_db[movie_key]:
+                    all_showtimes.append({**showtime, 'movie': movie_key})
+            else:
+                # Get showtimes for all movies
+                for movie, showtimes in self.showtimes_db.items():
+                    for showtime in showtimes:
+                        all_showtimes.append({**showtime, 'movie': movie})
+
+            # Filter by date if provided (use parsed_date)
+            if parsed_date:
+                all_showtimes = [s for s in all_showtimes if s['date'] == parsed_date]
 
             # Filter by format if provided
             if format_preference:
-                showtimes = [s for s in showtimes if format_preference.lower() in s['format'].lower()]
+                all_showtimes = [s for s in all_showtimes if format_preference.lower() in s['format'].lower()]
 
-            if not showtimes:
+            if not all_showtimes:
                 return json.dumps({
-                    "error": f"No showtimes found for '{movie_key}' with given criteria",
-                    "date_filter": date,
+                    "error": "No showtimes found matching the criteria",
+                    "movie_filter": movie_title,
+                    "date_filter": f"{date} (parsed as: {parsed_date})" if parsed_date != date else date,
                     "format_filter": format_preference,
                     "confidence": 0.0,
                     "source": "Theater Showtime Database"
                 })
 
-            # Group by date
-            showtimes_by_date = {}
-            for showtime in showtimes:
+            # Group by movie and date
+            showtimes_grouped = {}
+            for showtime in all_showtimes:
+                movie_name = showtime['movie']
+                if movie_name not in showtimes_grouped:
+                    showtimes_grouped[movie_name] = {}
+
                 date_key = showtime['date']
-                if date_key not in showtimes_by_date:
-                    showtimes_by_date[date_key] = []
-                showtimes_by_date[date_key].append({
+                if date_key not in showtimes_grouped[movie_name]:
+                    showtimes_grouped[movie_name][date_key] = []
+
+                showtimes_grouped[movie_name][date_key].append({
                     "showtime_id": showtime['showtime_id'],
                     "time": showtime['time'],
                     "format": showtime['format'],
@@ -155,13 +230,45 @@ class TicketMasterAgent:
                 })
 
             print("----found")
-            return json.dumps({
-                "movie": movie_key,
-                "showtimes": showtimes_by_date,
-                "total_showtimes": len(showtimes),
-                "confidence": 1.0,
-                "source": "Theater Showtime Database"
-            }, indent=2)
+
+            # Format response based on whether movie was specified
+            if movie_title:
+                # Single movie response
+                movie_key = list(showtimes_grouped.keys())[0]
+                return json.dumps({
+                    "movie": movie_key,
+                    "showtimes": showtimes_grouped[movie_key],
+                    "total_showtimes": sum(len(times) for times in showtimes_grouped[movie_key].values()),
+                    "confidence": 1.0,
+                    "source": "Theater Showtime Database"
+                }, indent=2)
+            else:
+                # Multiple movies response
+                movies_list = []
+                for movie_name, dates in showtimes_grouped.items():
+                    total_showtimes = sum(len(times) for times in dates.values())
+                    movies_list.append({
+                        "movie": movie_name,
+                        "showtimes": dates,
+                        "total_showtimes": total_showtimes
+                    })
+
+                response_data = {
+                    "movies": movies_list,
+                    "total_movies": len(movies_list),
+                    "filters_applied": {
+                        "date": parsed_date,
+                        "format": format_preference
+                    },
+                    "confidence": 1.0,
+                    "source": "Theater Showtime Database"
+                }
+
+                # Add date interpretation note if date was parsed from weekday
+                if date and parsed_date and date.lower() != parsed_date:
+                    response_data["date_interpretation"] = f"'{date}' interpreted as {parsed_date}"
+
+                return json.dumps(response_data, indent=2)
 
         except Exception as e:
             print("----except")
@@ -345,13 +452,15 @@ class TicketMasterAgent:
         """Create LangChain tools from instance methods"""
         @tool
         def check_showtimes(
-            movie_title: Annotated[str, "Movie title to check showtimes for"],
-            date: Annotated[Optional[str], "Date in YYYY-MM-DD format (optional)"] = None,
+            movie_title: Annotated[Optional[str], "Movie title to check (optional - if not provided, shows all movies)"] = None,
+            date: Annotated[Optional[str], "Date: can be YYYY-MM-DD, weekday name (Monday-Sunday), today, or tomorrow (optional)"] = None,
             format_preference: Annotated[Optional[str], "Format preference: Standard, IMAX, 3D, IMAX 3D (optional)"] = None
         ) -> str:
             """
-            Check available showtimes for a specific movie.
-            Returns date, time, format, and seat availability.
+            Check available showtimes. Can filter by movie title, date, and/or format.
+            If no movie_title is provided, returns all available movies matching the other criteria.
+            Date accepts: YYYY-MM-DD format, weekday names (e.g., Friday), or relative terms (today/tomorrow).
+            Returns date, time, format, and seat availability for each match.
             """
             return self.check_showtimes(movie_title, date, format_preference)
 
@@ -414,6 +523,12 @@ Important guidelines:
 - Provide clear price breakdowns showing all fees and taxes
 - Ground all information in actual returned data
 
+Workflow for ticket purchase requests:
+1. If user asks for tickets, first check_showtimes to find available showtimes
+2. If user wants to proceed with purchase, call purchase_tickets with the showtime_id
+3. DO NOT call get_pricing separately - purchase_tickets already includes pricing
+4. After completing a purchase, provide the confirmation and STOP - do not call more tools
+
 CRITICAL Validation requirements:
 - MUST include confidence scores from tool responses in your final answer
 - MUST cite data sources (Theater Database/System) for each piece of information
@@ -447,8 +562,15 @@ Example response format:
         # Prepare messages
         messages = [HumanMessage(content=query)]
 
-        # Invoke agent
-        result = agent.invoke({"messages": messages})
+        # Invoke agent with recursion limit
+        try:
+            result = agent.invoke(
+                {"messages": messages},
+                config={"recursion_limit": 25}
+            )
+        except Exception as e:
+            # If agent fails, return error message
+            return f"I apologize, but I encountered an issue processing your ticket request. Error: {str(e)[:200]}. Please provide more specific details like the movie title, date, and time."
 
         # Extract response content
         agent_response = result["messages"][-1].content if result["messages"] else "No response"
@@ -531,3 +653,12 @@ if __name__ == "__main__":
     response5 = invoke_ticket_master(query5)
     print(f"Query: {query5}")
     print(f"Response: {response5}\n")
+
+    # Test 6: In-domain query - Purchase Tickets without movie title
+    print("=" * 80)
+    print("Test 6: Showtimes Without Movie Title (IN-DOMAIN)")
+    print("=" * 80)
+    query6 = "Can I get two IMAX tickets for Friday 19:30?"
+    response6 = invoke_ticket_master(query6)
+    print(f"Query: {query6}")
+    print(f"Response: {response6}\n")

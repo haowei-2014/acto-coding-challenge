@@ -51,6 +51,72 @@ class VendorAgent:
             }
             self.combos = {}
 
+    def _fuzzy_match_item(self, query: str):
+        """
+        Fuzzy match an item query to inventory items.
+        Extracts key words and matches against category and item names.
+        Handles synonyms like "coke" → "soda", "hotdog" → "hot dog"
+
+        Returns: (category, item_name, details) or None if no match
+        """
+        query_lower = query.lower()
+        query_words = set(query_lower.split())
+
+        # Synonym mapping (whole words only)
+        synonyms = {
+            'coke': 'soda',
+            'pop': 'soda',
+            'drink': 'soda',
+            'beverage': 'soda',
+            'hotdog': 'hot dog',
+            'hot-dog': 'hot dog',
+        }
+
+        # Replace synonyms in query (whole words only)
+        for synonym, replacement in synonyms.items():
+            if synonym in query_words:
+                query_lower = query_lower.replace(synonym, replacement)
+                query_words = set(query_lower.split())
+
+        # Extract size keywords
+        sizes = {'small', 'medium', 'large', 'regular', 'loaded'}
+        size_match = None
+        for size in sizes:
+            if size in query_words:
+                size_match = size
+                break
+
+        # Try exact match first
+        for category, items_dict in self.inventory_db.items():
+            for item_name, details in items_dict.items():
+                full_name = f"{category} {item_name}".lower()
+                if query_lower == full_name or query_lower in full_name:
+                    return (category, item_name, details)
+
+        # Try fuzzy match - check if category name is in query
+        for category, items_dict in self.inventory_db.items():
+            category_lower = category.lower()
+
+            # Check if category is mentioned in query (handle multi-word categories)
+            category_words = set(category_lower.split())
+            if category_lower in query_lower or any(word in query_words for word in category_words):
+                # If size is specified, try to match it
+                if size_match:
+                    for item_name, details in items_dict.items():
+                        item_lower = item_name.lower()
+                        if size_match in item_lower:
+                            return (category, item_name, details)
+
+                    # If exact size not found, suggest largest available
+                    if 'Large' in items_dict:
+                        return (category, 'Large', items_dict['Large'])
+
+                # Return first item in category if no size specified
+                first_item = list(items_dict.keys())[0]
+                return (category, first_item, items_dict[first_item])
+
+        return None
+
     def get_snack_pricing(self, item_name: Optional[str] = None) -> str:
         """
         Get pricing information for snacks and combos.
@@ -116,6 +182,7 @@ class VendorAgent:
     def check_availability(self, items: str) -> str:
         """
         Check inventory availability for specific items.
+        Uses fuzzy matching to find closest items (e.g., "caramel popcorn" → "Popcorn Large")
 
         Args:
             items: Comma-separated list of items (e.g., "Popcorn Large, Soda Medium")
@@ -125,24 +192,26 @@ class VendorAgent:
             results = []
 
             for item_query in item_list:
-                found = False
-                for category, items_dict in self.inventory_db.items():
-                    for item_name, details in items_dict.items():
-                        full_name = f"{category} {item_name}"
-                        if item_query.lower() in full_name.lower():
-                            results.append({
-                                "requested": item_query,
-                                "item": full_name,
-                                "available": details['stock'] > 0,
-                                "stock": details['stock'],
-                                "price": f"${details['price']:.2f}"
-                            })
-                            found = True
-                            break
-                    if found:
-                        break
+                # Try fuzzy matching
+                match = self._fuzzy_match_item(item_query)
 
-                if not found:
+                if match:
+                    category, item_name, details = match
+                    full_name = f"{category} {item_name}"
+                    result = {
+                        "requested": item_query,
+                        "item": full_name,
+                        "available": details['stock'] > 0,
+                        "stock": details['stock'],
+                        "price": f"${details['price']:.2f}"
+                    }
+
+                    # Add note if fuzzy matched
+                    if item_query.lower() != full_name.lower():
+                        result["note"] = f"Matched '{item_query}' to '{full_name}'"
+
+                    results.append(result)
+                else:
                     results.append({
                         "requested": item_query,
                         "available": False,
@@ -161,6 +230,7 @@ class VendorAgent:
     def place_order(self, items: str, pickup_time: Optional[str] = None) -> str:
         """
         Place an order for snacks.
+        Uses fuzzy matching to find closest items (e.g., "caramel popcorn" → "Popcorn Large")
 
         Args:
             items: Comma-separated list (e.g., "Popcorn Large x2, Soda Medium")
@@ -179,45 +249,47 @@ class VendorAgent:
                     item_query = parts[0].strip()
                     quantity = int(parts[1].strip())
 
-                # Find item
-                found = False
-                for category, items_dict in self.inventory_db.items():
-                    for item_name, details in items_dict.items():
-                        full_name = f"{category} {item_name}"
-                        if item_query.lower() in full_name.lower():
-                            # Check stock
-                            if details['stock'] < quantity:
-                                return json.dumps({
-                                    "error": "Insufficient inventory",
-                                    "item": full_name,
-                                    "requested": quantity,
-                                    "available": details['stock'],
-                                    "confidence": 1.0,
-                                    "source": "Theater Vendor Order System"
-                                })
+                # Use fuzzy matching to find item
+                match = self._fuzzy_match_item(item_query)
 
-                            # Reserve inventory
-                            details['stock'] -= quantity
-                            item_price = details['price'] * quantity
-                            total_price += item_price
-
-                            order_items.append({
-                                "item": full_name,
-                                "quantity": quantity,
-                                "unit_price": f"${details['price']:.2f}",
-                                "subtotal": f"${item_price:.2f}"
-                            })
-                            found = True
-                            break
-                    if found:
-                        break
-
-                if not found:
+                if not match:
                     return json.dumps({
                         "error": f"Item '{item_query}' not found",
                         "confidence": 0.0,
                         "source": "Theater Vendor Order System"
                     })
+
+                category, item_name, details = match
+                full_name = f"{category} {item_name}"
+
+                # Check stock
+                if details['stock'] < quantity:
+                    return json.dumps({
+                        "error": "Insufficient inventory",
+                        "item": full_name,
+                        "requested": quantity,
+                        "available": details['stock'],
+                        "confidence": 1.0,
+                        "source": "Theater Vendor Order System"
+                    })
+
+                # Reserve inventory
+                details['stock'] -= quantity
+                item_price = details['price'] * quantity
+                total_price += item_price
+
+                order_item = {
+                    "item": full_name,
+                    "quantity": quantity,
+                    "unit_price": f"${details['price']:.2f}",
+                    "subtotal": f"${item_price:.2f}"
+                }
+
+                # Add note if fuzzy matched
+                if item_query.lower() != full_name.lower():
+                    order_item["note"] = f"Matched '{item_query}' to '{full_name}'"
+
+                order_items.append(order_item)
 
             # Calculate total
             tax = total_price * 0.08
@@ -302,12 +374,18 @@ Important guidelines:
 - ALWAYS cite confidence scores and sources for EVERY piece of information
 - Never hallucinate prices, stock levels, or order details not returned by your tools
 - Determine if the query is within your domain (snacks, food, beverages, orders)
-  * IN-DOMAIN: snack prices, inventory, combos, food orders, pickup times
+  * IN-DOMAIN: snack prices, inventory, combos, food orders, pickup times, ordering requests
   * OUT-OF-DOMAIN: movie recommendations, actor info, tickets, showtimes, reservations
 - If asked about OUT-OF-DOMAIN topics, prefix your response with the keyword OUT-OF-DOMAIN, and
  politely inform the user this is outside your expertise
 - Suggest combo deals when they save money
 - Ground all information in actual returned data
+
+CRITICAL: When users ask to ORDER items:
+- This is IN-DOMAIN - use the place_order tool to process the order
+- Do NOT respond with OUT-OF-DOMAIN for ordering requests
+- Default to Large size if no size is specified
+- Default quantity to 1 if not specified
 
 CRITICAL Validation requirements:
 - MUST include confidence scores from tool responses in your final answer
@@ -368,6 +446,7 @@ def invoke_vendor(query: str, state: Optional[Dict[str, Any]] = None) -> str:
 if __name__ == "__main__":
     print("Testing Vendor Agent with Structured Output...\n")
 
+    """
     # Test 1: In-domain - Get Pricing
     print("=" * 80)
     print("Test 1: Get Snack Pricing (IN-DOMAIN)")
@@ -403,3 +482,22 @@ if __name__ == "__main__":
     response4 = invoke_vendor(query4)
     print(f"Query: {query4}")
     print(f"Response: {response4}\n")
+    """
+
+    # # Test 5: In-domain - Check Availability
+    # print("=" * 80)
+    # print("Test 5: Check Availability (IN-DOMAIN)")
+    # print("=" * 80)
+    # query5 = "Can you add a large caramel popcorn?"
+    # response5 = invoke_vendor(query5)
+    # print(f"Query: {query5}")
+    # print(f"Response: {response5}\n")
+
+    # Test 6: In-domain - Check Availability
+    print("=" * 80)
+    print("Test 6: Check Availability (IN-DOMAIN)")
+    print("=" * 80)
+    query6 = "Order popcorn"
+    response6 = invoke_vendor(query6)
+    print(f"Query: {query6}")
+    print(f"Response: {response6}\n")
