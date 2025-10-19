@@ -1,0 +1,46 @@
+{
+  "inventory": {
+    "Popcorn": {
+      "Small": {"price": 5.00, "stock": 50},
+      "Medium": {"price": 7.00, "stock": 45},
+      "Large": {"price": 9.00, "stock": 40}
+    },
+    "Soda": {
+      "Small": {"price": 4.00, "stock": 60},
+      "Medium": {"price": 5.50, "stock": 55},
+      "Large": {"price": 7.00, "stock": 50}
+    },
+    "Candy": {
+      "M&Ms": {"price": 4.50, "stock": 30},
+      "Skittles": {"price": 4.50, "stock": 28},
+      "Reese's": {"price": 4.50, "stock": 32}
+    },
+    "Nachos": {
+      "Regular": {"price": 8.00, "stock": 35},
+      "Loaded": {"price": 10.00, "stock": 20}
+    },
+    "Hot Dog": {
+      "Regular": {"price": 6.50, "stock": 30}
+    },
+    "Water": {
+      "Bottled": {"price": 3.00, "stock": 100}
+    }
+  },
+  "combos": {
+    "Movie Night Combo": {
+      "items": ["Popcorn Large", "Soda Large", "Candy M&Ms"],
+      "price": 18.00,
+      "savings": 3.00
+    },
+    "Family Pack": {
+      "items": ["Popcorn Large", "Popcorn Large", "Soda Large", "Soda Large", "Nachos Regular"],
+      "price": 35.00,
+      "savings": 7.00
+    },
+    "Quick Snack": {
+      "items": ["Hot Dog Regular", "Soda Small"],
+      "price": 9.00,
+      "savings": 1.50
+    }
+  }
+}

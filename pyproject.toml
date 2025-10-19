@@ -1,0 +1,16 @@
+[project]
+name = "acto-coding-challenge"
+version = "0.1.0"
+description = "Acto coding challenge"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain>=0.1.0",
+    "langchain-openai>=0.0.5",
+    "langgraph>=0.0.20",
+    "numpy>=1.24.0",
+    "openai>=1.12.0",
+    "pandas>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "tenacity>=8.2.0",
+]
