@@ -27,7 +27,7 @@ from vendor_agent import invoke_vendor
 load_dotenv()
 
 # Initialize LLM
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
 
 # Define the state structure with reducer for messages
@@ -36,7 +36,6 @@ class OrchestratorState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]  # Use operator.add to append messages
     next: str  # Which agent to route to next
     session_state: Dict[str, Any]  # Shared session context
-    agents_called: List[str]  # Track which agents have been called
     reformulated_query: str  # Reformulated query for the next specialist
 
 
@@ -61,79 +60,54 @@ class RouteDecision(BaseModel):
 def create_supervisor_chain():
     """Create the supervisor that routes to specialist agents"""
 
-    system_prompt = """You are the Orchestrator at a movie theater, managing three specialist agents.
+    system_prompt = """You are the Orchestrator at a movie theater.
 
-Your specialist agents:
-1. movie_specialist: Handles movie recommendations, details, plot summaries, actor information
-2. ticket_master: Handles showtimes, pricing, ticket purchases, reservations
-3. vendor: Handles snack pricing, inventory, food/beverage orders
+Specialist agents:
+1. movie_specialist: Recommendations, details, plots, actor info
+2. ticket_master: Showtimes, pricing, reservations, purchases
+3. vendor: Snack pricing, inventory, orders
 
-Your responsibilities:
-- Analyze user queries and route to the appropriate specialist agent
-- Handle multi-domain queries by routing to multiple agents in sequence
-- Maintain session context (movie selection, party size, cart items)
-- Coordinate cross-domain requests efficiently
-- ONLY route to specialists when their specific expertise is needed
-- When task is complete, route to FINISH
+Routing rules:
+- Do NOT over-route
+- Only route when user EXPLICITLY requests that service
+- Stop routing when all user requests are fulfilled
 
-CRITICAL: Do not over-route! Only call specialists when the user actually asks for their domain:
-- Just because a movie name is mentioned doesn't mean you need movie_specialist
+Examples:
+- "I want to watch a comedy" → movie_specialist (implicit recommendation request)
+- "Recommend a comedy" → movie_specialist (explicit request)
+- "Book 3 tickets for Inception" → ticket_master only (don't also route to movie_specialist)
+- "Reserve seats for Dune and buy candy" → ticket_master, then vendor
+- "Tell me about Dune and get me tickets" → movie_specialist, then ticket_master
+- "Get me tickets and tell me the plot" → ticket_master first (to get movie name), then movie_specialist
+- "Can I have nachos?" → vendor only
 
-Routing guidelines:
-- Analyze the ORIGINAL user query to identify ALL domains mentioned:
-  * Movies/actors/recommendations/plot → movie_specialist domain
-  * Tickets/showtimes/pricing/reservations → ticket_master domain
-  * Snacks/food/beverages/popcorn/soda/orders → vendor domain
+Routing order:
+- If user asks for tickets AND movie info without specifying movie name: ticket_master first, then movie_specialist
+- Get concrete information (movie names, bookings) before abstract information (plots, reviews)
 
-- CRITICAL: Consider dependencies between domains before routing:
-  * If user asks vague movie questions AND wants tickets:
-    - Route to ticket_master FIRST to identify which specific movie they're booking
-    - Then route to movie_specialist with the specific movie name from the ticket response
-  * If user mentions a specific movie name AND wants tickets:
-    - Can route to movie_specialist first, then ticket_master
-  * General principle: Get concrete information (ticket bookings, specific items) before abstract queries (opinions, recommendations)
-  * This ensures you have context to provide better answers
+After an agent responds:
+- Look at original user message and list ALL explicit requests
+- Check which requests have been handled (agent names in history)
+- Only route if there are EXPLICIT unhandled requests remaining
+- Each request should be handled by exactly one agent
+- When all explicit requests done, route to FINISH
 
-- If NO specialist has responded yet:
-  * Determine the optimal routing order considering dependencies
-  * Route to the specialist that provides concrete context first when queries are vague
+Query reformulation:
+- Use specific movie names from previous responses
+- For FINISH, set empty string
 
-- If specialists have ALREADY responded (check message history):
-  * Use information from previous responses to enhance subsequent queries
-  * Extract movie names, dates, or other context from previous responses
-  * Reformulate queries with this concrete context
-  * If ALL domains addressed → route to FINISH with empty reformulated_query
-
-- Query Reformulation Rules:
-  * Extract ONLY information relevant to the target specialist's domain
-  * Remove mentions of other domains to avoid OUT-OF-DOMAIN responses
-  * For vendor: focus only on snack items, prices, availability - do NOT mention movies or tickets
-  * For ticket_master: MUST include movie title if mentioned in original query or previous responses
-    - If user mentioned a specific movie, include it in the reformulated query
-    - Example: "Get 2 IMAX tickets for Friday 19:30" should be "Get 2 IMAX tickets for Avatar on Friday at 19:30"
-  * For movie_specialist: focus on movie titles, actors, recommendations
-  * Make the reformulated query clear and actionable with all necessary context
-  * For FINISH, set reformulated_query to empty string
-
-- CRITICAL: Each specialist should only be called ONCE per query. Never route to the same specialist twice.
-
-Important:
-- Look at the conversation history to see which specialists have already responded
-- Do not send the same query to the same specialist multiple times
-- When all parts of the user's request are addressed, ALWAYS route to FINISH
-
-Given the conversation above, who should act next?
-Select one of: {options}
+Select from: {options}
 """
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         MessagesPlaceholder(variable_name="messages"),
-        ("system", "Given the conversation above, who should act next? Select one of: {options}")
+        ("system", "Who should act next? Select from: {options}")
     ]).partial(options=str(options), members=", ".join(members))
 
     # Use structured output to get routing decision with query reformulation
     supervisor = prompt | llm.with_structured_output(RouteDecision)
+    # print(f"--- supervisor: {supervisor}")
     return supervisor
 
 
@@ -150,7 +124,8 @@ def movie_specialist_node(state: OrchestratorState) -> Dict[str, Any]:
                 query = msg.content
                 break
 
-    print(f"movie node: {query}")
+    messages = state.get("messages")
+    print(f"--- movie node: {query}, messages: {messages}")
     # Invoke the movie specialist
     response = invoke_movie_specialist(query, state.get("session_state"))
 
@@ -159,13 +134,8 @@ def movie_specialist_node(state: OrchestratorState) -> Dict[str, Any]:
         name="movie_specialist"
     )
 
-    # Track that this agent was called
-    agents_called = state.get("agents_called", [])
-    agents_called.append("movie_specialist")
-
     return {
         "messages": [result_message],
-        "agents_called": agents_called,
     }
 
 
@@ -181,7 +151,8 @@ def ticket_master_node(state: OrchestratorState) -> Dict[str, Any]:
                 query = msg.content
                 break
 
-    print(f"ticket node: {query}")
+    messages = state.get("messages")
+    print(f"--- ticket node: {query}, messages: {messages}")
     # Invoke the ticket master
     response = invoke_ticket_master(query, state.get("session_state"))
 
@@ -190,13 +161,8 @@ def ticket_master_node(state: OrchestratorState) -> Dict[str, Any]:
         name="ticket_master"
     )
 
-    # Track that this agent was called
-    agents_called = state.get("agents_called", [])
-    agents_called.append("ticket_master")
-
     return {
         "messages": [result_message],
-        "agents_called": agents_called,
     }
 
 
@@ -212,7 +178,8 @@ def vendor_node(state: OrchestratorState) -> Dict[str, Any]:
                 query = msg.content
                 break
 
-    print(f"vendor node: {query}")
+    messages = state.get("messages")
+    print(f"--- vendor node: {query}, messages: {messages}")
     # Invoke the vendor
     response = invoke_vendor(query, state.get("session_state"))
 
@@ -221,13 +188,8 @@ def vendor_node(state: OrchestratorState) -> Dict[str, Any]:
         name="vendor"
     )
 
-    # Track that this agent was called
-    agents_called = state.get("agents_called", [])
-    agents_called.append("vendor")
-
     return {
         "messages": [result_message],
-        "agents_called": agents_called,
     }
 
 
@@ -235,18 +197,8 @@ def supervisor_node(state: OrchestratorState) -> Dict[str, Any]:
     """Supervisor decides which agent to route to and reformulates the query"""
     supervisor_chain = create_supervisor_chain()
 
-    # Check which agents have already been called
-    agents_called = state.get("agents_called", [])
-
-    # If any agent has already responded, add a system message to help supervisor
+    # Use messages from state
     messages = state["messages"].copy()
-    if agents_called:
-        system_hint = SystemMessage(
-            content=f"Note: The following agents have already responded to this query: {', '.join(agents_called)}. "
-                    f"Either route to a different domain if needed, or route to FINISH if the query is fully satisfied. "
-                    f"Remember to reformulate the query appropriately for the next specialist."
-        )
-        messages.append(system_hint)
 
     # Get routing decision with reformulated query
     try:
@@ -267,15 +219,9 @@ def supervisor_node(state: OrchestratorState) -> Dict[str, Any]:
             "reformulated_query": "",
         }
 
-    # Safety check: prevent routing to the same agent twice
+    # Extract routing decision
     next_agent = decision.next
     reformulated_query = decision.reformulated_query if hasattr(decision, 'reformulated_query') else ""
-
-    if next_agent in agents_called:
-        # Force FINISH if trying to route to same agent
-        next_agent = "FINISH"
-        reformulated_query = ""
-
 
     # Update state with next agent and reformulated query
     return {
@@ -360,7 +306,6 @@ class OrchestratorAgent:
             "messages": [HumanMessage(content=query)],
             "next": "",
             "session_state": self.session_state,
-            "agents_called": [],
             "reformulated_query": ""
         }
 
@@ -424,7 +369,7 @@ if __name__ == "__main__":
     print("=" * 80)
     query1 = "I want to watch a sci-fi movie with great visual effects"
     response1 = invoke_orchestrator(query1)
-    print(f"Query: {query1}")
+    print(f"---Query: {query1}")
     print(f"Response: {response1}\n")
 
     # Test 2: Ticket query
@@ -433,7 +378,7 @@ if __name__ == "__main__":
     print("=" * 80)
     query2 = "What are the showtimes for Avatar on Friday?"
     response2 = invoke_orchestrator(query2)
-    print(f"Query: {query2}")
+    print(f"---Query: {query2}")
     print(f"Response: {response2}\n")
 
     # Test 3: Vendor query
@@ -442,7 +387,7 @@ if __name__ == "__main__":
     print("=" * 80)
     query3 = "How much is a large popcorn and soda?"
     response3 = invoke_orchestrator(query3)
-    print(f"Query: {query3}")
+    print(f"---Query: {query3}")
     print(f"Response: {response3}\n")
 
 
@@ -452,14 +397,23 @@ if __name__ == "__main__":
     print("=" * 80)
     query4 = "I want to watch Avatar, get 2 tickets for 7pm, and order popcorn"
     response4 = invoke_orchestrator(query4)
-    print(f"Query: {query4}")
+    print(f"---Query: {query4}")
     print(f"Response: {response4}\n")
 
     # Test 5: Multi-domain query
     print("=" * 80)
     print("Test 5: Multi-Domain Query")
     print("=" * 80)
-    query5 = "Can I get two IMAX tickets for Friday 19:30 and add a large caramel popcorn? Also, is the new sci‑fi any good?"
+    query5 = "Can I get two IMAX tickets for Friday 19:30 and tell me the plot about it"
     response5 = invoke_orchestrator(query5)
-    print(f"Query: {query5}")
+    print(f"---Query: {query5}")
     print(f"Response: {response5}\n")
+
+    # Test 6: Multi-domain query
+    print("=" * 80)
+    print("Test 6: Multi-Domain Query")
+    print("=" * 80)
+    query6 = "Can I get two IMAX tickets for Friday 19:30 and add a large caramel popcorn? Also, is the new sci‑fi any good?"
+    response6 = invoke_orchestrator(query6)
+    print(f"Query: {query6}")
+    print(f"Response: {response6}\n")

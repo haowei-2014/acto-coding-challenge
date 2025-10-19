@@ -23,7 +23,7 @@ from langchain.agents import create_agent
 load_dotenv()
 
 # Initialize LLM
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
 
 class TicketMasterAgent:
