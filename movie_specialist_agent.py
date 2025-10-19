@@ -17,6 +17,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.tools import tool
 from langchain.agents import create_agent
 from langchain_core.prompts import ChatPromptTemplate
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +35,8 @@ class MovieSpecialistAgent:
         self.movies_df = None
         self.credits_df = None
         self._load_movie_data()
+        self.agent = self.create_agent()  # Create agent once, reuse for conversation history
+        self.message_history = []  # Track conversation history
 
     def _load_movie_data(self):
         """Load and prepare movie data"""
@@ -342,6 +345,25 @@ Example response format:
         agent = create_agent(llm, tools, system_prompt=system_prompt)
         return agent
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((TimeoutError, ConnectionError, Exception))
+    )
+    def _invoke_with_retry(self, messages: List) -> Dict[str, Any]:
+        """Invoke agent with retry logic and timeout
+
+        Args:
+            messages: List of messages for the agent
+
+        Returns:
+            Agent result dictionary
+        """
+        return self.agent.invoke(
+            {"messages": messages},
+            config={"recursion_limit": 15}
+        )
+
     def invoke(self, query: str, state: Optional[Dict[str, Any]] = None) -> str:
         """Invoke the Movie Specialist agent with a query
 
@@ -352,26 +374,26 @@ Example response format:
         Returns:
             str: Agent's response content
         """
-        agent = self.create_agent()
-        messages = [HumanMessage(content=query)]
-        result = agent.invoke(
-            {"messages": messages},
-            config={"recursion_limit": 15}
-        )
-        agent_response = result["messages"][-1].content if result["messages"] else "No response"
-        return agent_response
+        # Add user message to history
+        self.message_history.append(HumanMessage(content=query))
 
+        try:
+            # Invoke agent with full conversation history and retry logic
+            result = self._invoke_with_retry(self.message_history)
 
-# Global instance (singleton pattern)
-_movie_specialist_instance = None
+            # Update history with all messages from result
+            self.message_history = result["messages"]
 
+            # Return the last message content
+            agent_response = result["messages"][-1].content if result["messages"] else "No response"
+            return agent_response
 
-def get_movie_specialist() -> MovieSpecialistAgent:
-    """Get or create the global Movie Specialist instance"""
-    global _movie_specialist_instance
-    if _movie_specialist_instance is None:
-        _movie_specialist_instance = MovieSpecialistAgent()
-    return _movie_specialist_instance
+        except Exception as e:
+            # If all retries fail, return error message
+            error_msg = f"I apologize, but I encountered an error processing your movie request. Error: {str(e)[:200]}. Please try again."
+            # Add error as AI message to maintain conversation flow
+            self.message_history.append(AIMessage(content=error_msg))
+            return error_msg
 
 
 def invoke_movie_specialist(query: str, state: Optional[Dict[str, Any]] = None) -> str:
@@ -384,7 +406,7 @@ def invoke_movie_specialist(query: str, state: Optional[Dict[str, Any]] = None) 
     Returns:
         str: Agent's response content
     """
-    specialist = get_movie_specialist()
+    specialist = MovieSpecialistAgent()
     return specialist.invoke(query, state)
 
 
@@ -392,12 +414,15 @@ if __name__ == "__main__":
     # Test the agent
     print("Testing Movie Specialist Agent with Structured Output...\n")
 
+    # Create a single movie specialist instance for all tests
+    specialist = MovieSpecialistAgent()
+
     # Test 1: In-domain query - Movie Recommendations
     print("=" * 80)
     print("Test 1: Movie Recommendations (IN-DOMAIN)")
     print("=" * 80)
     query1 = "I want to watch a sci-fi action movie with great visual effects"
-    response1 = invoke_movie_specialist(query1)
+    response1 = specialist.invoke(query1)
     print(f"Query: {query1}")
     print(f"Response: {response1}\n")
 
@@ -406,7 +431,7 @@ if __name__ == "__main__":
     print("Test 2: Movie Details (IN-DOMAIN)")
     print("=" * 80)
     query2 = "Tell me about the movie Avatar"
-    response2 = invoke_movie_specialist(query2)
+    response2 = specialist.invoke(query2)
     print(f"Query: {query2}")
     print(f"Response: {response2}\n")
 
@@ -415,7 +440,7 @@ if __name__ == "__main__":
     print("Test 3: Actor Information (IN-DOMAIN)")
     print("=" * 80)
     query3 = "What movies has Zoe Saldana been in?"
-    response3 = invoke_movie_specialist(query3)
+    response3 = specialist.invoke(query3)
     print(f"Query: {query3}")
     print(f"Response: {response3}\n")
 
@@ -424,7 +449,7 @@ if __name__ == "__main__":
     print("Test 4: Ticket Purchase (OUT-OF-DOMAIN)")
     print("=" * 80)
     query4 = "Can I buy two tickets for Avatar?"
-    response4 = invoke_movie_specialist(query4)
+    response4 = specialist.invoke(query4)
     print(f"Query: {query4}")
     print(f"Response: {response4}\n")
 
@@ -433,7 +458,7 @@ if __name__ == "__main__":
     print("Test 5: Snack Ordering (OUT-OF-DOMAIN)")
     print("=" * 80)
     query5 = "I want to order popcorn and soda"
-    response5 = invoke_movie_specialist(query5)
+    response5 = specialist.invoke(query5)
     print(f"Query: {query5}")
     print(f"Response: {response5}\n")
 

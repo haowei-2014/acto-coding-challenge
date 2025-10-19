@@ -12,10 +12,11 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import random
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain.agents import create_agent
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Load environment variables
 load_dotenv()
@@ -33,6 +34,8 @@ class VendorAgent:
         self.combos = {}
         self.orders_db = {}
         self._load_inventory()
+        self.agent = self.create_agent()  # Create agent once, reuse for conversation history
+        self.message_history = []  # Track conversation history
 
     def _load_inventory(self):
         """Load inventory from JSON file"""
@@ -400,6 +403,22 @@ Example response format:
         agent = create_agent(llm, tools, system_prompt=system_prompt)
         return agent
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((TimeoutError, ConnectionError, Exception))
+    )
+    def _invoke_with_retry(self, messages: List) -> Dict[str, Any]:
+        """Invoke agent with retry logic and timeout
+
+        Args:
+            messages: List of messages for the agent
+
+        Returns:
+            Agent result dictionary
+        """
+        return self.agent.invoke({"messages": messages})
+
     def invoke(self, query: str, state: Optional[Dict[str, Any]] = None) -> str:
         """Invoke the Vendor agent with a query
 
@@ -410,49 +429,40 @@ Example response format:
         Returns:
             str: Agent's response content
         """
-        agent = self.create_agent()
-        messages = [HumanMessage(content=query)]
-        result = agent.invoke({"messages": messages})
-        agent_response = result["messages"][-1].content if result["messages"] else "No response"
-        return agent_response
+        # Add user message to history
+        self.message_history.append(HumanMessage(content=query))
 
+        try:
+            # Invoke agent with full conversation history and retry logic
+            result = self._invoke_with_retry(self.message_history)
 
-# Global instance (singleton pattern)
-_vendor_instance = None
+            # Update history with all messages from result
+            self.message_history = result["messages"]
 
+            # Return the last message content
+            agent_response = result["messages"][-1].content if result["messages"] else "No response"
+            return agent_response
 
-def get_vendor() -> VendorAgent:
-    """Get or create the global Vendor instance"""
-    global _vendor_instance
-    if _vendor_instance is None:
-        _vendor_instance = VendorAgent()
-    return _vendor_instance
-
-
-def invoke_vendor(query: str, state: Optional[Dict[str, Any]] = None) -> str:
-    """Convenience function to invoke the Vendor agent
-
-    Args:
-        query: User's question or request
-        state: Optional session state (for context preservation)
-
-    Returns:
-        str: Agent's response content
-    """
-    vendor = get_vendor()
-    return vendor.invoke(query, state)
+        except Exception as e:
+            # If all retries fail, return error message
+            error_msg = f"I apologize, but I encountered an error processing your vendor request. Error: {str(e)[:200]}. Please try again."
+            # Add error as AI message to maintain conversation flow
+            self.message_history.append(AIMessage(content=error_msg))
+            return error_msg
 
 
 if __name__ == "__main__":
     print("Testing Vendor Agent with Structured Output...\n")
 
-    """
+    # Create a single vendor instance for all tests (maintains conversation history)
+    vendor = VendorAgent()
+
     # Test 1: In-domain - Get Pricing
     print("=" * 80)
     print("Test 1: Get Snack Pricing (IN-DOMAIN)")
     print("=" * 80)
     query1 = "How much is a large popcorn and soda?"
-    response1 = invoke_vendor(query1)
+    response1 = vendor.invoke(query1)
     print(f"Query: {query1}")
     print(f"Response: {response1}\n")
 
@@ -461,7 +471,7 @@ if __name__ == "__main__":
     print("Test 2: Check Availability (IN-DOMAIN)")
     print("=" * 80)
     query2 = "Do you have nachos available?"
-    response2 = invoke_vendor(query2)
+    response2 = vendor.invoke(query2)
     print(f"Query: {query2}")
     print(f"Response: {response2}\n")
 
@@ -470,7 +480,7 @@ if __name__ == "__main__":
     print("Test 3: Place Order (IN-DOMAIN)")
     print("=" * 80)
     query3 = "I want to order 2 large popcorns and a medium soda"
-    response3 = invoke_vendor(query3)
+    response3 = vendor.invoke(query3)
     print(f"Query: {query3}")
     print(f"Response: {response3}\n")
 
@@ -479,25 +489,29 @@ if __name__ == "__main__":
     print("Test 4: Movie Info (OUT-OF-DOMAIN)")
     print("=" * 80)
     query4 = "What movies are playing tonight?"
-    response4 = invoke_vendor(query4)
+    response4 = vendor.invoke(query4)
     print(f"Query: {query4}")
     print(f"Response: {response4}\n")
-    """
 
-    # # Test 5: In-domain - Check Availability
-    # print("=" * 80)
-    # print("Test 5: Check Availability (IN-DOMAIN)")
-    # print("=" * 80)
-    # query5 = "Can you add a large caramel popcorn?"
-    # response5 = invoke_vendor(query5)
-    # print(f"Query: {query5}")
-    # print(f"Response: {response5}\n")
-
-    # Test 6: In-domain - Check Availability
+    # Test 5: In-domain - Check Availability
     print("=" * 80)
-    print("Test 6: Check Availability (IN-DOMAIN)")
+    print("Test 5: Check Availability (IN-DOMAIN)")
+    print("=" * 80)
+    query5 = "Can you add a large caramel popcorn?"
+    response5 = vendor.invoke(query5)
+    print(f"Query: {query5}")
+    print(f"Response: {response5}\n")
+
+    # Test 6: In-domain - Place Order
+    print("=" * 80)
+    print("Test 6: Place Order (IN-DOMAIN)")
     print("=" * 80)
     query6 = "Order popcorn"
-    response6 = invoke_vendor(query6)
+    response6 = vendor.invoke(query6)
     print(f"Query: {query6}")
     print(f"Response: {response6}\n")
+
+    print('--------')
+    for message in vendor.message_history:
+        print(type(message), message)
+        print("\n")

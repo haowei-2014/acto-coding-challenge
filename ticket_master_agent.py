@@ -18,6 +18,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain.agents import create_agent
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Load environment variables
 load_dotenv()
@@ -35,6 +36,8 @@ class TicketMasterAgent:
         self.reservations_db = {}
         self.movies_list = []
         self._initialize_showtimes()
+        self.agent = self.create_agent()  # Create agent once, reuse for conversation history
+        self.message_history = []  # Track conversation history
 
     def _initialize_showtimes(self):
         """Initialize showtime database based on movie data"""
@@ -512,6 +515,7 @@ You have access to exactly 3 tools:
 3. purchase_tickets: Reserve and confirm ticket purchases
 
 Important guidelines:
+- ALWAYS use your tools to answer queries - don't ask for clarification when tools can handle optional parameters
 - ALWAYS cite confidence scores and sources for EVERY piece of information
 - Never hallucinate showtimes, prices, or reservation details not returned by your tools
 - Determine if the query is within your domain (tickets, showtimes, pricing, purchases)
@@ -546,6 +550,25 @@ Example response format:
 
         return agent
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((TimeoutError, ConnectionError, Exception))
+    )
+    def _invoke_with_retry(self, messages: List) -> Dict[str, Any]:
+        """Invoke agent with retry logic and timeout
+
+        Args:
+            messages: List of messages for the agent
+
+        Returns:
+            Agent result dictionary
+        """
+        return self.agent.invoke(
+            {"messages": messages},
+            config={"recursion_limit": 25}
+        )
+
     def invoke(self, query: str, state: Optional[Dict[str, Any]] = None) -> str:
         """
         Invoke the Ticket Master agent with a query
@@ -557,64 +580,42 @@ Example response format:
         Returns:
             str: Agent's response content
         """
-        agent = self.create_agent()
+        # Add user message to history
+        self.message_history.append(HumanMessage(content=query))
 
-        # Prepare messages
-        messages = [HumanMessage(content=query)]
-
-        # Invoke agent with recursion limit
         try:
-            result = agent.invoke(
-                {"messages": messages},
-                config={"recursion_limit": 25}
-            )
+            # Invoke agent with full conversation history and retry logic
+            result = self._invoke_with_retry(self.message_history)
+
+            # Update history with all messages from result
+            self.message_history = result["messages"]
+
+            # Return the last message content
+            agent_response = result["messages"][-1].content if result["messages"] else "No response"
+            return agent_response
+
         except Exception as e:
-            # If agent fails, return error message
-            return f"I apologize, but I encountered an issue processing your ticket request. Error: {str(e)[:200]}. Please provide more specific details like the movie title, date, and time."
+            # If all retries fail, return error message
+            error_msg = f"I apologize, but I encountered an issue processing your ticket request. Error: {str(e)[:200]}. Please provide more specific details like the movie title, date, and time."
+            # Add error as AI message to maintain conversation flow
+            self.message_history.append(AIMessage(content=error_msg))
+            return error_msg
 
-        # Extract response content
-        agent_response = result["messages"][-1].content if result["messages"] else "No response"
-
-        return agent_response
-
-
-# Global instance (singleton pattern)
-_ticket_master_instance = None
-
-
-def get_ticket_master() -> TicketMasterAgent:
-    """Get or create the global Ticket Master instance"""
-    global _ticket_master_instance
-    if _ticket_master_instance is None:
-        _ticket_master_instance = TicketMasterAgent()
-    return _ticket_master_instance
-
-
-def invoke_ticket_master(query: str, state: Optional[Dict[str, Any]] = None) -> str:
-    """
-    Convenience function to invoke the Ticket Master agent
-
-    Args:
-        query: User's question or request
-        state: Optional session state (for context preservation)
-
-    Returns:
-        str: Agent's response content
-    """
-    ticket_master = get_ticket_master()
-    return ticket_master.invoke(query, state)
 
 
 if __name__ == "__main__":
     # Test the agent
     print("Testing Ticket Master Agent with Structured Output...\n")
 
+    # Create a single ticket master instance for all tests (maintains conversation history)
+    ticket_master = TicketMasterAgent()
+
     # Test 1: In-domain query - Check Showtimes
     print("=" * 80)
     print("Test 1: Check Showtimes (IN-DOMAIN)")
     print("=" * 80)
     query1 = "What showtimes are available for Avatar?"
-    response1 = invoke_ticket_master(query1)
+    response1 = ticket_master.invoke(query1)
     print(f"Query: {query1}")
     print(f"Response: {response1}\n")
 
@@ -623,7 +624,7 @@ if __name__ == "__main__":
     print("Test 2: Get Pricing (IN-DOMAIN)")
     print("=" * 80)
     query2 = "How much for 2 IMAX tickets?"
-    response2 = invoke_ticket_master(query2)
+    response2 = ticket_master.invoke(query2)
     print(f"Query: {query2}")
     print(f"Response: {response2}\n")
 
@@ -632,7 +633,7 @@ if __name__ == "__main__":
     print("Test 3: Purchase Tickets (IN-DOMAIN)")
     print("=" * 80)
     query3 = "Can I reserve 2 tickets for Avatar at 7pm in IMAX?"
-    response3 = invoke_ticket_master(query3)
+    response3 = ticket_master.invoke(query3)
     print(f"Query: {query3}")
     print(f"Response: {response3}\n")
 
@@ -641,7 +642,7 @@ if __name__ == "__main__":
     print("Test 4: Movie Recommendations (OUT-OF-DOMAIN)")
     print("=" * 80)
     query4 = "What's a good sci-fi movie to watch?"
-    response4 = invoke_ticket_master(query4)
+    response4 = ticket_master.invoke(query4)
     print(f"Query: {query4}")
     print(f"Response: {response4}\n")
 
@@ -650,7 +651,7 @@ if __name__ == "__main__":
     print("Test 5: Snack Ordering (OUT-OF-DOMAIN)")
     print("=" * 80)
     query5 = "Can I get popcorn with my tickets?"
-    response5 = invoke_ticket_master(query5)
+    response5 = ticket_master.invoke(query5)
     print(f"Query: {query5}")
     print(f"Response: {response5}\n")
 
@@ -659,6 +660,6 @@ if __name__ == "__main__":
     print("Test 6: Showtimes Without Movie Title (IN-DOMAIN)")
     print("=" * 80)
     query6 = "Can I get two IMAX tickets for Friday 19:30?"
-    response6 = invoke_ticket_master(query6)
+    response6 = ticket_master.invoke(query6)
     print(f"Query: {query6}")
     print(f"Response: {response6}\n")
