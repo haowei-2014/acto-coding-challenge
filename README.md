@@ -4,7 +4,7 @@
 First, `cd` to this folder.
 ### Prerequisite:
 - Edit `.env.example` file, add your `OPENAI_API_KEY`, and rename the file to `.env`
-- Download TMDB 5000 Movie Datasets, and put them in `./data` folder. Only the first 100 rows are used.
+- Download TMDB 5000 Movie Datasets, and put them in `./data` folder. Only the first 100 rows are used in code.
 ```
 data
 ├── tmdb_5000_credits.csv
@@ -34,6 +34,13 @@ Python 3.10 is recommended to use. You can use `uv` to create a virtual environm
  python main.py
 ```
 ## Demo
+1. Orchestrator: cross-domain query -> partially answered, asked for further clarification about movie name
+2. Orchestrator: give movie name -> answered correctly
+3. Switch to ticket agent: ask about showtime -> answered correctly
+4. Switch back to orchestrator: What snack did I order? -> orchestrator still remembered it
+5. Switch to movie agent about a cross-domain query -> escalated to orchestrator
+
+![](demo.gif)
 
 ## Architecture
 
