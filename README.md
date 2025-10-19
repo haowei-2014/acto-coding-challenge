@@ -28,6 +28,7 @@ docker run -it --rm \
 Python 3.10 is recommended to use. You can use `uv` to create a virtual environment.
 ```
  uv python pin 3.10
+ uv init
  uv venv
  uv add -r requirements.txt
  source .venv/bin/activate

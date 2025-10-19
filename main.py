@@ -93,21 +93,25 @@ def main():
         try:
             if choice == "1":
                 print("🎬 [Movie Specialist]")
+                print("⏳ Processing your request...\n")
                 response = movie_specialist.invoke(query, session_state)
                 final_response = handle_agent_response(response, query, session_state, orchestrator)
 
             elif choice == "2":
                 print("🎟️  [Ticket Master]")
+                print("⏳ Processing your request...\n")
                 response = ticket_master.invoke(query, session_state)
                 final_response = handle_agent_response(response, query, session_state, orchestrator)
 
             elif choice == "3":
                 print("🍿 [Vendor]")
+                print("⏳ Processing your request...\n")
                 response = vendor.invoke(query, session_state)
                 final_response = handle_agent_response(response, query, session_state, orchestrator)
 
             else:  # choice == "4"
                 print("🎭 [Orchestrator]")
+                print("⏳ Processing your request...\n")
                 final_response = orchestrator.invoke(query, session_state)
 
             # Display response
