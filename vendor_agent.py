@@ -54,6 +54,40 @@ class VendorAgent:
             }
             self.combos = {}
 
+    def _find_substitutions(self, category: str, item_name: str, quantity: int):
+        """
+        Find alternative items in the same category when an item is out of stock.
+
+        Args:
+            category: The category of the out-of-stock item
+            item_name: The name of the out-of-stock item
+            quantity: The requested quantity
+
+        Returns:
+            List of substitution suggestions with availability and price
+        """
+        substitutions = []
+
+        if category not in self.inventory_db:
+            return substitutions
+
+        for other_item_name, details in self.inventory_db[category].items():
+            # Skip the same item
+            if other_item_name == item_name:
+                continue
+
+            # Check if the alternative has sufficient stock
+            if details['stock'] >= quantity:
+                substitutions.append({
+                    "item": f"{category} {other_item_name}",
+                    "available_quantity": details['stock'],
+                    "price": f"${details['price']:.2f}",
+                    "reason": f"Alternative {other_item_name} size with sufficient stock"
+                })
+
+        # Limit to 2 suggestions
+        return substitutions[:2]
+
     def _fuzzy_match_item(self, query: str):
         """
         Fuzzy match an item query to inventory items.
@@ -267,14 +301,24 @@ class VendorAgent:
 
                 # Check stock
                 if details['stock'] < quantity:
-                    return json.dumps({
+                    # Find substitution suggestions
+                    substitutions = self._find_substitutions(category, item_name, quantity)
+
+                    error_response = {
                         "error": "Insufficient inventory",
                         "item": full_name,
                         "requested": quantity,
                         "available": details['stock'],
                         "confidence": 1.0,
                         "source": "Theater Vendor Order System"
-                    })
+                    }
+
+                    # Add substitutions if available
+                    if substitutions:
+                        error_response["substitutions"] = substitutions
+                        error_response["message"] = f"We don't have enough {full_name} in stock. Consider these alternatives:"
+
+                    return json.dumps(error_response, indent=2)
 
                 # Reserve inventory
                 details['stock'] -= quantity
@@ -452,66 +496,23 @@ Example response format:
 
 
 if __name__ == "__main__":
-    print("Testing Vendor Agent with Structured Output...\n")
+    print("\nVENDOR AGENT - Demo\n")
 
-    # Create a single vendor instance for all tests (maintains conversation history)
     vendor = VendorAgent()
 
-    # Test 1: In-domain - Get Pricing
-    print("=" * 80)
-    print("Test 1: Get Snack Pricing (IN-DOMAIN)")
-    print("=" * 80)
-    query1 = "How much is a large popcorn and soda?"
-    response1 = vendor.invoke(query1)
-    print(f"Query: {query1}")
-    print(f"Response: {response1}\n")
+    test_queries = [
+        ("Get Snack Pricing", "How much is a large popcorn and soda?"),
+        ("Check Availability", "Do you have nachos available?"),
+        ("Place Order", "I want to order 2 large popcorns and a medium soda"),
+        ("Fuzzy Match Order", "Can you add a large caramel popcorn?"),
+        ("Simple Order", "Order popcorn"),
+        ("OUT-OF-DOMAIN: Movies", "What movies are playing tonight?"),
+    ]
 
-    # Test 2: In-domain - Check Availability
-    print("=" * 80)
-    print("Test 2: Check Availability (IN-DOMAIN)")
-    print("=" * 80)
-    query2 = "Do you have nachos available?"
-    response2 = vendor.invoke(query2)
-    print(f"Query: {query2}")
-    print(f"Response: {response2}\n")
-
-    # Test 3: In-domain - Place Order
-    print("=" * 80)
-    print("Test 3: Place Order (IN-DOMAIN)")
-    print("=" * 80)
-    query3 = "I want to order 2 large popcorns and a medium soda"
-    response3 = vendor.invoke(query3)
-    print(f"Query: {query3}")
-    print(f"Response: {response3}\n")
-
-    # Test 4: Out-of-domain - Movies
-    print("=" * 80)
-    print("Test 4: Movie Info (OUT-OF-DOMAIN)")
-    print("=" * 80)
-    query4 = "What movies are playing tonight?"
-    response4 = vendor.invoke(query4)
-    print(f"Query: {query4}")
-    print(f"Response: {response4}\n")
-
-    # Test 5: In-domain - Check Availability
-    print("=" * 80)
-    print("Test 5: Check Availability (IN-DOMAIN)")
-    print("=" * 80)
-    query5 = "Can you add a large caramel popcorn?"
-    response5 = vendor.invoke(query5)
-    print(f"Query: {query5}")
-    print(f"Response: {response5}\n")
-
-    # Test 6: In-domain - Place Order
-    print("=" * 80)
-    print("Test 6: Place Order (IN-DOMAIN)")
-    print("=" * 80)
-    query6 = "Order popcorn"
-    response6 = vendor.invoke(query6)
-    print(f"Query: {query6}")
-    print(f"Response: {response6}\n")
-
-    print('--------')
-    for message in vendor.message_history:
-        print(type(message), message)
-        print("\n")
+    for title, query in test_queries:
+        print("=" * 80)
+        print(f"{title}")
+        print("=" * 80)
+        print(f"Query: {query}")
+        response = vendor.invoke(query)
+        print(f"Response: {response}\n")

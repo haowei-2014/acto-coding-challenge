@@ -44,9 +44,9 @@ class MovieSpecialistAgent:
             return  # Already loaded
 
         try:
-            # Load datasets
-            self.movies_df = pd.read_csv('tmdb_5000_movies_small.csv', delimiter=';')
-            self.credits_df = pd.read_csv('tmdb_5000_credits_small.csv', delimiter=';')
+            # Load datasets (first 100 rows only)
+            self.movies_df = pd.read_csv('data/tmdb_5000_movies.csv', nrows=100)
+            self.credits_df = pd.read_csv('data/tmdb_5000_credits.csv', nrows=100)
 
             # Parse JSON columns
             self.movies_df['genres_parsed'] = self.movies_df['genres'].apply(
@@ -121,7 +121,6 @@ class MovieSpecialistAgent:
                 }
                 recommendations.append(rec)
 
-            print("------ found")
             return json.dumps({
                 "query": query,
                 "recommendations": recommendations,
@@ -173,7 +172,6 @@ class MovieSpecialistAgent:
                 "source": "TMDB Dataset - exact match" if matches.iloc[0]['title'].lower() == title.lower() else "TMDB Dataset - partial match"
             }
 
-            print("------ found")
             return json.dumps(details, indent=2)
 
         except Exception as e:
@@ -184,9 +182,6 @@ class MovieSpecialistAgent:
             })
     def get_actor_info(self, actor_name: str) -> str:
         """Get information about an actor including their filmography"""
-        print("-----loading....")
-        print(f"Columns available: {self.movies_df.columns.tolist()}")
-        print(f"Has cast_parsed: {'cast_parsed' in self.movies_df.columns}")
 
         try:
             # Search across all cast lists
@@ -200,9 +195,6 @@ class MovieSpecialistAgent:
                     "confidence": 0.0,
                     "source": "TMDB Dataset"
                 })
-
-            print(f"Searching for actor: {actor_name}")
-            print(f"Total movies to search: {len(self.movies_df)}")
 
             for idx, row in self.movies_df.iterrows():
                 try:
@@ -225,7 +217,6 @@ class MovieSpecialistAgent:
                     continue
 
             if not actor_movies:
-                print("--- found no actor movie")
                 return json.dumps({
                     "error": f"Actor '{actor_name}' not found in database",
                     "confidence": 0.0,
@@ -261,7 +252,6 @@ class MovieSpecialistAgent:
             }
 
             print(f"Returning actor info...")
-            print("----- found")
             return json.dumps(actor_info, indent=2)
 
         except Exception as e:
@@ -396,69 +386,24 @@ Example response format:
             return error_msg
 
 
-def invoke_movie_specialist(query: str, state: Optional[Dict[str, Any]] = None) -> str:
-    """Convenience function to invoke the Movie Specialist agent
-
-    Args:
-        query: User's question or request
-        state: Optional session state (for context preservation)
-
-    Returns:
-        str: Agent's response content
-    """
-    specialist = MovieSpecialistAgent()
-    return specialist.invoke(query, state)
-
-
 if __name__ == "__main__":
-    # Test the agent
-    print("Testing Movie Specialist Agent with Structured Output...\n")
+    print("\nMOVIE SPECIALIST AGENT - Demo\n")
 
-    # Create a single movie specialist instance for all tests
     specialist = MovieSpecialistAgent()
 
-    # Test 1: In-domain query - Movie Recommendations
-    print("=" * 80)
-    print("Test 1: Movie Recommendations (IN-DOMAIN)")
-    print("=" * 80)
-    query1 = "I want to watch a sci-fi action movie with great visual effects"
-    response1 = specialist.invoke(query1)
-    print(f"Query: {query1}")
-    print(f"Response: {response1}\n")
+    test_queries = [
+        ("Movie Recommendations", "I want to watch a sci-fi action movie with great visual effects"),
+        ("Movie Details", "Tell me about the movie Avatar"),
+        ("Actor Information", "What movies has Zoe Saldana been in?"),
+        ("OUT-OF-DOMAIN: Tickets", "Can I buy two tickets for Avatar?"),
+        ("OUT-OF-DOMAIN: Snacks", "I want to order popcorn and soda"),
+    ]
 
-    # Test 2: In-domain query - Movie Details
-    print("=" * 80)
-    print("Test 2: Movie Details (IN-DOMAIN)")
-    print("=" * 80)
-    query2 = "Tell me about the movie Avatar"
-    response2 = specialist.invoke(query2)
-    print(f"Query: {query2}")
-    print(f"Response: {response2}\n")
-
-    # Test 3: In-domain query - Actor Info
-    print("=" * 80)
-    print("Test 3: Actor Information (IN-DOMAIN)")
-    print("=" * 80)
-    query3 = "What movies has Zoe Saldana been in?"
-    response3 = specialist.invoke(query3)
-    print(f"Query: {query3}")
-    print(f"Response: {response3}\n")
-
-    # Test 4: Out-of-domain query - Tickets
-    print("=" * 80)
-    print("Test 4: Ticket Purchase (OUT-OF-DOMAIN)")
-    print("=" * 80)
-    query4 = "Can I buy two tickets for Avatar?"
-    response4 = specialist.invoke(query4)
-    print(f"Query: {query4}")
-    print(f"Response: {response4}\n")
-
-    # Test 5: Out-of-domain query - Snacks
-    print("=" * 80)
-    print("Test 5: Snack Ordering (OUT-OF-DOMAIN)")
-    print("=" * 80)
-    query5 = "I want to order popcorn and soda"
-    response5 = specialist.invoke(query5)
-    print(f"Query: {query5}")
-    print(f"Response: {response5}\n")
+    for title, query in test_queries:
+        print("=" * 80)
+        print(f"{title}")
+        print("=" * 80)
+        print(f"Query: {query}")
+        response = specialist.invoke(query)
+        print(f"Response: {response}\n")
 

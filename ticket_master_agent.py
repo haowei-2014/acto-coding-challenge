@@ -46,7 +46,8 @@ class TicketMasterAgent:
 
         # Load movie data
         try:
-            movies_df = pd.read_csv('tmdb_5000_movies_small.csv', delimiter=';')
+            # Load first 100 rows only
+            movies_df = pd.read_csv('data/tmdb_5000_movies.csv', nrows=100)
 
             # Get top 20 popular movies
             movies_df = movies_df.sort_values('popularity', ascending=False).head(20)
@@ -232,8 +233,6 @@ class TicketMasterAgent:
                     "status": "Available" if showtime['available_seats'] > 10 else "Limited Seats"
                 })
 
-            print("----found")
-
             # Format response based on whether movie was specified
             if movie_title:
                 # Single movie response
@@ -274,7 +273,6 @@ class TicketMasterAgent:
                 return json.dumps(response_data, indent=2)
 
         except Exception as e:
-            print("----except")
             return json.dumps({
                 "error": str(e),
                 "confidence": 0.0,
@@ -353,7 +351,6 @@ class TicketMasterAgent:
                 "source": "Theater Pricing System"
             }
 
-            print("----found")
             return json.dumps(pricing, indent=2)
 
         except Exception as e:
@@ -604,62 +601,23 @@ Example response format:
 
 
 if __name__ == "__main__":
-    # Test the agent
-    print("Testing Ticket Master Agent with Structured Output...\n")
+    print("\nTICKET MASTER AGENT - Demo\n")
 
-    # Create a single ticket master instance for all tests (maintains conversation history)
     ticket_master = TicketMasterAgent()
 
-    # Test 1: In-domain query - Check Showtimes
-    print("=" * 80)
-    print("Test 1: Check Showtimes (IN-DOMAIN)")
-    print("=" * 80)
-    query1 = "What showtimes are available for Avatar?"
-    response1 = ticket_master.invoke(query1)
-    print(f"Query: {query1}")
-    print(f"Response: {response1}\n")
+    test_queries = [
+        ("Check Showtimes", "What showtimes are available for Avatar?"),
+        ("Get Pricing", "How much for 2 IMAX tickets?"),
+        ("Purchase Tickets", "Can I reserve 2 tickets for Avatar at 7pm in IMAX?"),
+        ("Showtimes Without Movie", "Can I get two IMAX tickets for Friday 19:30?"),
+        ("OUT-OF-DOMAIN: Movies", "What's a good sci-fi movie to watch?"),
+        ("OUT-OF-DOMAIN: Snacks", "Can I get popcorn with my tickets?"),
+    ]
 
-    # Test 2: In-domain query - Get Pricing
-    print("=" * 80)
-    print("Test 2: Get Pricing (IN-DOMAIN)")
-    print("=" * 80)
-    query2 = "How much for 2 IMAX tickets?"
-    response2 = ticket_master.invoke(query2)
-    print(f"Query: {query2}")
-    print(f"Response: {response2}\n")
-
-    # Test 3: In-domain query - Purchase Tickets
-    print("=" * 80)
-    print("Test 3: Purchase Tickets (IN-DOMAIN)")
-    print("=" * 80)
-    query3 = "Can I reserve 2 tickets for Avatar at 7pm in IMAX?"
-    response3 = ticket_master.invoke(query3)
-    print(f"Query: {query3}")
-    print(f"Response: {response3}\n")
-
-    # Test 4: Out-of-domain query - Movie Recommendations
-    print("=" * 80)
-    print("Test 4: Movie Recommendations (OUT-OF-DOMAIN)")
-    print("=" * 80)
-    query4 = "What's a good sci-fi movie to watch?"
-    response4 = ticket_master.invoke(query4)
-    print(f"Query: {query4}")
-    print(f"Response: {response4}\n")
-
-    # Test 5: Out-of-domain query - Snacks
-    print("=" * 80)
-    print("Test 5: Snack Ordering (OUT-OF-DOMAIN)")
-    print("=" * 80)
-    query5 = "Can I get popcorn with my tickets?"
-    response5 = ticket_master.invoke(query5)
-    print(f"Query: {query5}")
-    print(f"Response: {response5}\n")
-
-    # Test 6: In-domain query - Purchase Tickets without movie title
-    print("=" * 80)
-    print("Test 6: Showtimes Without Movie Title (IN-DOMAIN)")
-    print("=" * 80)
-    query6 = "Can I get two IMAX tickets for Friday 19:30?"
-    response6 = ticket_master.invoke(query6)
-    print(f"Query: {query6}")
-    print(f"Response: {response6}\n")
+    for title, query in test_queries:
+        print("=" * 80)
+        print(f"{title}")
+        print("=" * 80)
+        print(f"Query: {query}")
+        response = ticket_master.invoke(query)
+        print(f"Response: {response}\n")

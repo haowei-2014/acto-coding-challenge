@@ -147,9 +147,6 @@ Select from: {options}
                     query = msg.content
                     break
 
-        messages = state.get("messages")
-        print(f"--- movie node: {query}, messages: {messages}")
-
         try:
             # Invoke the movie specialist (already has retry logic)
             response = self.movie_specialist.invoke(query, state.get("session_state"))
@@ -181,9 +178,6 @@ Select from: {options}
                     query = msg.content
                     break
 
-        messages = state.get("messages")
-        print(f"--- ticket node: {query}, messages: {messages}")
-
         try:
             # Invoke the ticket master (already has retry logic)
             response = self.ticket_master.invoke(query, state.get("session_state"))
@@ -214,9 +208,6 @@ Select from: {options}
                 if isinstance(msg, HumanMessage):
                     query = msg.content
                     break
-
-        messages = state.get("messages")
-        print(f"--- vendor node: {query}, messages: {messages}")
 
         try:
             # Invoke the vendor (already has retry logic)
@@ -283,15 +274,15 @@ Select from: {options}
         workflow = StateGraph(OrchestratorState)
 
         # Add nodes
-        workflow.add_node("supervisor", self._supervisor_node)
+        workflow.add_node("orchestrator", self._supervisor_node)
         workflow.add_node("movie_specialist", self._movie_specialist_node)
         workflow.add_node("ticket_master", self._ticket_master_node)
         workflow.add_node("vendor", self._vendor_node)
 
         # Add edges from specialist agents back to supervisor
-        workflow.add_edge("movie_specialist", "supervisor")
-        workflow.add_edge("ticket_master", "supervisor")
-        workflow.add_edge("vendor", "supervisor")
+        workflow.add_edge("movie_specialist", "orchestrator")
+        workflow.add_edge("ticket_master", "orchestrator")
+        workflow.add_edge("vendor", "orchestrator")
 
         # Conditional routing from supervisor
         def should_continue(state: OrchestratorState) -> str:
@@ -304,7 +295,7 @@ Select from: {options}
                 return next_agent
 
         workflow.add_conditional_edges(
-            "supervisor",
+            "orchestrator",
             should_continue,
             {
                 "movie_specialist": "movie_specialist",
@@ -315,7 +306,7 @@ Select from: {options}
         )
 
         # Set entry point
-        workflow.set_entry_point("supervisor")
+        workflow.set_entry_point("orchestrator")
 
         # Compile the graph
         graph = workflow.compile()
@@ -387,111 +378,42 @@ Select from: {options}
         self.session_state = {}
         self.message_history = []
 
+    def save_graph_visualization(self, filename: str = "orchestrator_graph.png"):
+        """Save the orchestrator graph as a PNG image
+
+        Args:
+            filename: Output filename for the graph image
+        """
+        try:
+            png_data = self.graph.get_graph().draw_mermaid_png()
+            with open(filename, "wb") as f:
+                f.write(png_data)
+            print(f"Graph visualization saved to {filename}")
+        except Exception as e:
+            print(f"Could not save graph visualization: {e}")
+            print("Printing Mermaid syntax instead:")
+            print(self.graph.get_graph().draw_mermaid())
+
 
 if __name__ == "__main__":
-    print("Testing Orchestrator Agent...\n")
+    print("\nORCHESTRATOR AGENT - Demo\n")
 
-    # Create a single orchestrator instance for all tests
     orchestrator = OrchestratorAgent()
 
-    query5 = "I want to watch Avatar, get 2 tickets for 7pm, and order popcorn"
-    response5 = orchestrator.invoke(query5)
-    print(response5)
-    print("---------")
+    test_queries = [
+        ("Single Domain: Movie", "I want to watch a sci-fi movie with great visual effects"),
+        ("Single Domain: Tickets", "What are the showtimes for Avatar on Friday?"),
+        ("Single Domain: Snacks", "How much is a large popcorn and soda?"),
+        ("Multi-Domain: All Three", "I want to watch Avatar, get 2 tickets for 7pm, and order popcorn"),
+        ("Multi-Domain: Tickets + Plot", "Can I get two IMAX tickets for Friday 19:30 and tell me the plot about it"),
+        ("Multi-Domain: Complex", "Can I get two IMAX tickets for Friday 19:30 and add a large caramel popcorn? Also, is the new sci‑fi any good?"),
+        ("Context Memory Test", "What snack did you order?"),
+    ]
 
-    query5 = "What snack did you buy?"
-    response5 = orchestrator.invoke(query5)
-    print(response5)
-
-    exit()
-
-
-
-    # Test 1: Movie query
-    print("=" * 80)
-    print("Test 1: Movie Query")
-    print("=" * 80)
-    query1 = "I want to watch a sci-fi movie with great visual effects"
-    response1 = orchestrator.invoke(query1)
-    print(f"---Query: {query1}")
-    print(f"Response: {response1}\n")
-
-    # Test 2: Ticket query
-    print("=" * 80)
-    print("Test 2: Ticket Query")
-    print("=" * 80)
-    query2 = "What are the showtimes for Avatar on Friday?"
-    orchestrator = OrchestratorAgent()
-    response2 = orchestrator.invoke(query2)
-    print(f"---Query: {query2}")
-    print(f"Response: {response2}\n")
-
-    # Test 3: Vendor query
-    print("=" * 80)
-    print("Test 3: Vendor Query")
-    print("=" * 80)
-    query3 = "How much is a large popcorn and soda?"
-    orchestrator = OrchestratorAgent()
-    response3 = orchestrator.invoke(query3)
-    print(f"---Query: {query3}")
-    print(f"Response: {response3}\n")
-
-
-    # Test 4: Multi-domain query
-    print("=" * 80)
-    print("Test 4: Multi-Domain Query")
-    print("=" * 80)
-    query4 = "I want to watch Avatar, get 2 tickets for 7pm, and order popcorn"
-    orchestrator = OrchestratorAgent()
-    response4 = orchestrator.invoke(query4)
-    print(f"---Query: {query4}")
-    print(f"Response: {response4}\n")
-
-    # Test 5: Multi-domain query
-    print("=" * 80)
-    print("Test 5: Multi-Domain Query")
-    print("=" * 80)
-    query5 = "Can I get two IMAX tickets for Friday 19:30 and tell me the plot about it"
-    orchestrator = OrchestratorAgent()
-    response5 = orchestrator.invoke(query5)
-    print(f"---Query: {query5}")
-    print(f"Response: {response5}\n")
-
-    # Test 6: Multi-domain query
-    print("=" * 80)
-    print("Test 6: Multi-Domain Query")
-    print("=" * 80)
-    query6 = "Can I get two IMAX tickets for Friday 19:30 and add a large caramel popcorn? Also, is the new sci‑fi any good?"
-    orchestrator = OrchestratorAgent()
-    response6 = orchestrator.invoke(query6)
-    print(f"Query: {query6}")
-    print(f"Response: {response6}\n")
-
-    # Test 7: Complex cross-domain - recommendations, tickets, and snacks
-    print("=" * 80)
-    print("Test 7: Complex Cross-Domain Query")
-    print("=" * 80)
-    query7 = "Suggest a thriller for tonight, book 3 tickets for the 8pm showing, and get me nachos and two sodas"
-    orchestrator = OrchestratorAgent()
-    response7 = orchestrator.invoke(query7)
-    print(f"Query: {query7}")
-    print(f"Response: {response7}\n")
-
-    # Test 8: Nuanced cross-domain - tickets with plot request for different movie
-    print("=" * 80)
-    print("Test 8: Nuanced Cross-Domain Query")
-    print("=" * 80)
-    query8 = "Reserve 4 seats for The Matrix on Saturday afternoon and also tell me what Interstellar is about"
-    response8 = orchestrator.invoke(query8)
-    print(f"Query: {query8}")
-    print(f"Response: {response8}\n")
-
-    # Test 9: Ambiguous cross-domain - implicit ticket request with food order
-    print("=" * 80)
-    print("Test 9: Ambiguous Cross-Domain Query")
-    print("=" * 80)
-    query9 = "I'm planning to see the new Batman movie with my family of 4, can you check if there's an evening show and also order a combo deal?"
-    orchestrator = OrchestratorAgent()
-    response9 = orchestrator.invoke(query9)
-    print(f"Query: {query9}")
-    print(f"Response: {response9}\n")
+    for title, query in test_queries:
+        print("=" * 80)
+        print(f"{title}")
+        print("=" * 80)
+        print(f"Query: {query}")
+        response = orchestrator.invoke(query)
+        print(f"Response: {response}\n")
