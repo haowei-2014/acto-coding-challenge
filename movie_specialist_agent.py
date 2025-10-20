@@ -308,6 +308,12 @@ You have access to exactly 3 tools:
 2. get_movie_details: Get detailed information about a specific movie
 3. get_actor_info: Get actor details and their top films
 
+IMPORTANT - Use Session Context:
+- Check the session state for previously mentioned information
+- If selected_movie is set, you can reference it without asking
+- If party_size is set, consider it when making recommendations (e.g., family-friendly for larger groups)
+- If genre preferences were mentioned, prioritize those
+
 Important guidelines:
 - ALWAYS cite confidence scores and sources for EVERY recommendation or piece of information
 - Never hallucinate movie titles, actors, or details not returned by your tools
@@ -364,10 +370,25 @@ Example response format:
         Returns:
             str: Agent's response content
         """
-        # Add user message to history
-        self.message_history.append(HumanMessage(content=query))
+        # Build context-aware message from session state
+        context_parts = []
+        if state:
+            if state.get('selected_movie'):
+                context_parts.append(f"Movie context: {state['selected_movie']}")
+            if state.get('party_size'):
+                context_parts.append(f"Party size: {state['party_size']}")
+            if state.get('preferred_format'):
+                context_parts.append(f"Preferred format: {state['preferred_format']}")
+
+        # Prepend context to query if available
+        if context_parts:
+            context_msg = f"[Session Context: {', '.join(context_parts)}]\n\nUser query: {query}"
+            self.message_history.append(HumanMessage(content=context_msg))
+        else:
+            self.message_history.append(HumanMessage(content=query))
 
         try:
+            print(f"--- movie: {self.message_history}")
             # Invoke agent with full conversation history and retry logic
             result = self._invoke_with_retry(self.message_history)
 

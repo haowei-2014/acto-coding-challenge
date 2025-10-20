@@ -417,6 +417,12 @@ You have access to exactly 3 tools:
 2. check_availability: Check stock status for items
 3. place_order: Process orders with inventory reservation
 
+IMPORTANT - Use Session Context:
+- Check the session state for previously mentioned information
+- If party_size is set, suggest quantities based on that (e.g., "2 large popcorns for your party of 2?")
+- If ticket_reservation_id is set, mention you can coordinate with their booking
+- If preferred_time is set, estimate pickup time accordingly
+
 Important guidelines:
 - ALWAYS cite confidence scores and sources for EVERY piece of information
 - Never hallucinate prices, stock levels, or order details not returned by your tools
@@ -473,10 +479,27 @@ Example response format:
         Returns:
             str: Agent's response content
         """
-        # Add user message to history
-        self.message_history.append(HumanMessage(content=query))
+        # Build context-aware message from session state
+        context_parts = []
+        if state:
+            if state.get('party_size'):
+                context_parts.append(f"Party size: {state['party_size']}")
+            if state.get('ticket_reservation_id'):
+                context_parts.append(f"Ticket reservation: {state['ticket_reservation_id']}")
+            if state.get('preferred_time'):
+                context_parts.append(f"Movie time: {state['preferred_time']}")
+            if state.get('selected_movie'):
+                context_parts.append(f"Movie: {state['selected_movie']}")
+
+        # Prepend context to query if available
+        if context_parts:
+            context_msg = f"[Session Context: {', '.join(context_parts)}]\n\nUser query: {query}"
+            self.message_history.append(HumanMessage(content=context_msg))
+        else:
+            self.message_history.append(HumanMessage(content=query))
 
         try:
+            print(f"--- vendor: {self.message_history}")
             # Invoke agent with full conversation history and retry logic
             result = self._invoke_with_retry(self.message_history)
 

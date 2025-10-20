@@ -46,6 +46,18 @@ members = ["movie_specialist", "ticket_master", "vendor", "FINISH"]
 options = members
 
 
+# Define session state structure
+class ExtractedSessionState(BaseModel):
+    """Extracted session state from conversation"""
+    selected_movie: Optional[str] = Field(default=None, description="Movie title mentioned or being discussed")
+    party_size: Optional[int] = Field(default=None, description="Number of tickets/people mentioned")
+    preferred_date: Optional[str] = Field(default=None, description="Preferred date (e.g., 'Friday', '2025-10-20')")
+    preferred_time: Optional[str] = Field(default=None, description="Preferred time (e.g., '19:00', '7pm')")
+    preferred_format: Optional[str] = Field(default=None, description="Preferred format (IMAX, 3D, Standard)")
+    ticket_reservation_id: Optional[str] = Field(default=None, description="Ticket reservation ID if mentioned")
+    snack_order_id: Optional[str] = Field(default=None, description="Snack order ID if mentioned")
+
+
 # Define routing decision structure using Pydantic
 class RouteDecision(BaseModel):
     """Decision on which agent to route to"""
@@ -59,6 +71,10 @@ class RouteDecision(BaseModel):
     final_answer: str = Field(
         default="",
         description="If next is FINISH, provide the final answer to the user based on conversation history. Otherwise empty string."
+    )
+    extracted_state: ExtractedSessionState = Field(
+        default_factory=ExtractedSessionState,
+        description="Key information extracted from the conversation (movie name, party size, date, etc.)"
     )
 
 
@@ -121,6 +137,13 @@ Special cases - route to FINISH immediately:
 Query reformulation:
 - Use specific movie names from previous responses
 - For FINISH, set empty string but provide final_answer
+
+CRITICAL - State Extraction:
+- ALWAYS extract key information from the conversation into extracted_state
+- Look for: movie names, party size (number of tickets/people), dates, times, formats, reservation IDs, order IDs
+- Update extracted_state with ANY new information found in recent messages
+- If information was already extracted, keep it (don't set to null)
+- Example: User says "I want 2 tickets for Avatar on Friday" → extract selected_movie="Avatar", party_size=2, preferred_date="Friday"
 
 Select from: {options}
 """
@@ -235,7 +258,7 @@ Select from: {options}
         # Use messages from state
         messages = state["messages"].copy()
 
-        # Get routing decision with reformulated query
+        # Get routing decision with reformulated query and extracted state
         try:
             decision = supervisor_chain.invoke({"messages": messages})
         except Exception as e:
@@ -261,11 +284,19 @@ Select from: {options}
         reformulated_query = decision.reformulated_query if hasattr(decision, 'reformulated_query') else ""
         final_answer = decision.final_answer if hasattr(decision, 'final_answer') else ""
 
-        # Update state with next agent, reformulated query, and final answer
+        # Merge extracted state with existing session state (keep existing values if new ones are None)
+        existing_session = state.get("session_state", {})
+        if hasattr(decision, 'extracted_state') and decision.extracted_state:
+            extracted = decision.extracted_state.model_dump(exclude_none=True)
+            # Update existing session with new extracted values
+            existing_session.update(extracted)
+
+        # Update state with next agent, reformulated query, final answer, and merged session state
         return {
             "next": next_agent,
             "reformulated_query": reformulated_query,
-            "final_answer": final_answer
+            "final_answer": final_answer,
+            "session_state": existing_session
         }
 
     def _create_orchestrator_graph(self):

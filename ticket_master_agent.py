@@ -511,6 +511,14 @@ You have access to exactly 3 tools:
 2. get_pricing: Calculate ticket prices with discounts and fees
 3. purchase_tickets: Reserve and confirm ticket purchases
 
+IMPORTANT - Use Session Context:
+- Check the session state for previously mentioned information
+- If selected_movie is set, use it (don't ask which movie)
+- If party_size is set, use it for ticket quantity
+- If preferred_date is set, use it when checking showtimes
+- If preferred_time is set, find showtimes close to that time
+- If preferred_format is set, prioritize that format (IMAX, 3D, Standard)
+
 Important guidelines:
 - ALWAYS use your tools to answer queries - don't ask for clarification when tools can handle optional parameters
 - ALWAYS cite confidence scores and sources for EVERY piece of information
@@ -577,10 +585,29 @@ Example response format:
         Returns:
             str: Agent's response content
         """
-        # Add user message to history
-        self.message_history.append(HumanMessage(content=query))
+        # Build context-aware message from session state
+        context_parts = []
+        if state:
+            if state.get('selected_movie'):
+                context_parts.append(f"Movie: {state['selected_movie']}")
+            if state.get('party_size'):
+                context_parts.append(f"Party size: {state['party_size']}")
+            if state.get('preferred_date'):
+                context_parts.append(f"Preferred date: {state['preferred_date']}")
+            if state.get('preferred_time'):
+                context_parts.append(f"Preferred time: {state['preferred_time']}")
+            if state.get('preferred_format'):
+                context_parts.append(f"Preferred format: {state['preferred_format']}")
+
+        # Prepend context to query if available
+        if context_parts:
+            context_msg = f"[Session Context: {', '.join(context_parts)}]\n\nUser query: {query}"
+            self.message_history.append(HumanMessage(content=context_msg))
+        else:
+            self.message_history.append(HumanMessage(content=query))
 
         try:
+            print(f"--- ticket: {self.message_history}")
             # Invoke agent with full conversation history and retry logic
             result = self._invoke_with_retry(self.message_history)
 
