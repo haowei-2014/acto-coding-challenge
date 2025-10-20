@@ -388,7 +388,6 @@ Example response format:
             self.message_history.append(HumanMessage(content=query))
 
         try:
-            print(f"--- movie: {self.message_history}")
             # Invoke agent with full conversation history and retry logic
             result = self._invoke_with_retry(self.message_history)
 
